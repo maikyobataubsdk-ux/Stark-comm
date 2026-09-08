@@ -1,0 +1,6 @@
+pyrogram>=2.0.106
+tgcrypto>=1.2.5
+python-dotenv>=1.0.0
+cryptography>=41.0.0
+pyaes>=1.6.1
+PySocks>=1.7.1
