@@ -1,0 +1,2124 @@
+"""
+╔══════════════════════════════════════════════════════════════════╗
+║           ᴀɴɪᴍᴇ ʙᴏᴛ ꜰᴀᴄᴛᴏʀʏ — ᴘʀᴏᴅᴜᴄᴛɪᴏɴ ʀᴇᴀᴅʏ               ║
+║   ᴊꜱᴏɴ ᴅᴀᴛᴀʙᴀꜱᴇ • ᴇɴᴄʀʏᴘᴛᴇᴅ ᴛᴏᴋᴇɴꜱ • ᴀᴜᴛᴏ ᴄᴏᴍᴍᴀɴᴅꜱ           ║
+╚══════════════════════════════════════════════════════════════════╝
+"""
+import asyncio, base64, hashlib, html, json, logging, os, re, secrets, signal, time
+from urllib.parse import quote
+
+from pyrogram import Client, filters, enums
+from pyrogram.types import (Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
+                            BotCommand, BotCommandScopeDefault, BotCommandScopeChat)
+from pyrogram.handlers import MessageHandler, CallbackQueryHandler, RawUpdateHandler
+from pyrogram.errors import (FloodWait, RPCError, UserNotParticipant, AccessTokenInvalid,
+                             AccessTokenExpired, UserIsBlocked, InputUserDeactivated,
+                             PeerIdInvalid, ChatAdminRequired)
+
+try:
+    from dotenv import load_dotenv; load_dotenv()
+except Exception:
+    pass
+
+# ══════════════════════════════════════════════════════════════════
+#  ⚙️ ᴄᴏɴꜰɪɢ — ʏʜᴀᴀɴ ᴠᴀʟᴜᴇꜱ ᴅɪʀᴇᴄᴛ ᴘᴀꜱᴛᴇ ᴋᴀʀᴏ (ᴇɴᴠ ɪɴ ᴄᴏᴅᴇ)
+# ══════════════════════════════════════════════════════════════════
+API_ID: int = 0                      # <-- my.telegram.org ꜱᴇ ᴀᴘɪ ɪᴅ
+API_HASH: str = ""                   # <-- my.telegram.org ꜱᴇ ᴀᴘɪ ʜᴀꜱʜ
+BOT_TOKEN: str = ""                  # <-- ꜰᴀᴄᴛᴏʀʏ ʙᴏᴛ ᴛᴏᴋᴇɴ (@ʙᴏᴛꜰᴀᴛʜᴇʀ)
+SUPREME_IDS: str = ""                # <-- ᴄᴏᴍᴍᴀ ꜱᴇᴘᴀʀᴀᴛᴇᴅ ᴅᴇᴠᴇʟᴏᴘᴇʀ ᴜꜱᴇʀ ɪᴅꜱ (ᴇx: "12345,67890")
+LOG_CHANNEL_ID: int = 0              # <-- ɢʟᴏʙᴀʟ ʟᴏɢ ᴄʜᴀɴɴᴇʟ ɪᴅ (0 = ᴏꜰꜰ)
+FACTORY_NAME: str = "Anime Bot Factory"
+CLONE_BOT_ID_TOKEN: str = ""         # <-- ᴏᴘᴛɪᴏɴᴀʟ ᴇxᴛʀᴀ ꜱᴇᴄʀᴇᴛ ꜰᴏʀ ᴛᴏᴋᴇɴ ᴇɴᴄʀʏᴘᴛɪᴏɴ
+DB_DIR: str = "data"                 # ᴊꜱᴏɴ ᴅᴀᴛᴀʙᴀꜱᴇ ꜰᴏʟᴅᴇʀ
+THUMB_DIR: str = "thumbs"            # ᴛʜᴜᴍʙɴᴀɪʟ ᴄᴀᴄʜᴇ ꜰᴏʟᴅᴇʀ
+CLEANUP_INTERVAL: int = 3600         # ꜱᴇᴄᴏɴᴅꜱ — ᴀᴜᴛᴏ-ᴄʟᴇᴀɴᴜᴘ ᴄʜᴇᴄᴋ
+CLONE_INACTIVE_DAYS: int = 3         # ɪɴᴀᴄᴛɪᴠᴇ ᴅᴀʏꜱ ʙᴇꜰᴏʀᴇ ᴀᴜᴛᴏ-ᴅᴇʟᴇᴛᴇ
+CLONE_MIN_USERS: int = 100           # ᴜꜱᴇʀꜱ >= ᴛʜɪꜱ = ɴᴇᴠᴇʀ ᴀᴜᴛᴏ-ᴅᴇʟᴇᴛᴇ
+
+# (ᴏᴘᴛɪᴏɴᴀʟ) ᴇɴᴠ ᴠᴀʀꜱ ᴏᴠᴇʀʀɪᴅᴇ — ᴄᴏᴅᴇ ᴠᴀʟᴜᴇꜱ ᴘʀɪᴏʀɪᴛʏ ᴡʜᴇɴ ꜱᴇᴛ
+API_ID = int(os.getenv("API_ID") or API_ID or 0)
+API_HASH = os.getenv("API_HASH") or API_HASH
+BOT_TOKEN = os.getenv("BOT_TOKEN") or BOT_TOKEN
+SUPREME_IDS = os.getenv("SUPREME_IDS") or SUPREME_IDS
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or LOG_CHANNEL_ID or 0)
+FACTORY_NAME = os.getenv("FACTORY_NAME") or FACTORY_NAME
+CLONE_BOT_ID_TOKEN = os.getenv("CLONE_BOT_ID_TOKEN") or CLONE_BOT_ID_TOKEN
+
+SUPREMES = {int(x) for x in SUPREME_IDS.replace(" ", "").split(",") if x.strip().isdigit()}
+
+# ═════════════════════════ ʟᴏɢɢɪɴɢ ═════════════════════════
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler("factory.log", encoding="utf-8")],
+)
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
+LOG = logging.getLogger("ꜰᴀᴄᴛᴏʀʏ")
+
+PM_HTML = enums.ParseMode.HTML
+PM_OFF = enums.ParseMode.DISABLED
+CMS = enums.ChatMemberStatus
+
+START_TS = None
+def now(): return int(time.time())
+START_TS = now()
+DAY_START = lambda: (now() // 86400) * 86400
+
+def dt(ts): return time.strftime("%d %b %Y, %H:%M UTC", time.gmtime(ts))
+
+def hms(sec):
+    sec = int(sec); d = sec // 86400; h = (sec % 86400) // 3600; m = (sec % 3600) // 60
+    return (f"{d}ᴅ " if d else "") + f"{h}ʜ {m}ᴍ"
+
+def human_size(n):
+    n = float(n)
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1024 or u == "GB":
+            return f"{int(n)} B" if u == "B" else f"{n:.1f} {u}"
+        n /= 1024
+
+def hesc(s): return html.escape(str(s) if s else "")
+
+# ═════════════════════ ᴛᴇxᴛ ꜱᴛʏʟᴇ — ꜱᴍᴀʟʟ ᴄᴀᴘꜱ ═════════════════════
+_SMALL_MAP = str.maketrans(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘqʀꜱᴛᴜᴠᴡxʏᴢ" "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘqʀꜱᴛᴜᴠᴡxʏᴢ")
+def sc(t): return str(t).translate(_SMALL_MAP)
+
+def btn(text, cb): return InlineKeyboardButton(sc(text), callback_data=cb)
+def ubtn(text, url): return InlineKeyboardButton(sc(text), url=url)
+
+def chunk(text, limit=3800):
+    out, cur = [], ""
+    for line in text.split("\n"):
+        if len(cur) + len(line) + 1 > limit:
+            out.append(cur); cur = line
+        else:
+            cur = (cur + "\n" + line) if cur else line
+    if cur: out.append(cur)
+    return out or [""]
+
+# ═════════════════════ ᴄᴏɴꜱᴛᴀɴᴛ ᴛᴇxᴛꜱ ═════════════════════
+DEFAULT_START = (
+    "👋 <b>ʜᴇʟʟᴏ {name}!</b>\n\n"
+    f"🎯 ɪ'ᴍ <b>{{botname}}</b> — ʏᴏᴜʀ ᴀɴɪᴍᴇ ᴘʀᴏᴠɪᴅᴇʀ ʙᴏᴛ.\n\n"
+    "🔍 <b>ꜱᴇᴀʀᴄʜ ᴇᴘɪꜱᴏᴅᴇ / ᴀɴɪᴍᴇ ʙʏ ꜱᴇɴᴅɪɴɢ:</b>\n"
+    "▸ S1 E4 / Season 1 Episode 4\n▸ 1x4 / s1e4\n▸ Anime Name or Episode Keyword\n\n"
+    "▶️ <b>ꜱᴇɴᴅ ᴀɴʏ Qᴜᴇʀʏ ɴᴏᴡ ᴀɴᴅ ᴇɴᴊᴏʏ! ✨</b>")
+
+DEFAULT_CAPTION = "🎬 <b>ꜱᴇᴀꜱᴏɴ {season} • ᴇᴘɪꜱᴏᴅᴇ {episode}</b>\n\n🤖 @{botname}"
+
+COMING_SOON = ("🔔 <b>ᴄᴏᴍɪɴɢ ꜱᴏᴏɴ</b>\n\n"
+               "New episodes are not uploaded yet.\nPlease check again later.")
+
+INVALID_FMT = (
+    "❌ <b>ɪɴᴠᴀʟɪᴅ ꜰᴏʀᴍᴀᴛ!</b>\n\n"
+    "✅ <b>ᴛʀʏ ʟɪᴋᴇ ᴛʜɪꜱ:</b>\n"
+    "━━━━━━━━━━━━━━\n"
+    "▸ Season 1 Episode 4\n▸ S1 E4\n▸ s1e4\n▸ 1x4\n▸ Anime Keyword or Name")
+
+CLONE_PROMPT = (
+    "🤖 <b>ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ᴀɴɪᴍᴇ ʙᴏᴛ</b>\n━━━━━━━━━━━━━━\n\n"
+    "1️⃣ Open @BotFather\n"
+    "2️⃣ /newbot → Set name & username\n"
+    f"3️⃣ Copy token and send here\n\n"
+    "🔐 <b>ꜱᴇᴄᴜʀɪᴛʏ:</b> Tokens are stored <u>ENCRYPTED</u> — never in plaintext.\n\n"
+    "⏳ <b>ɴᴏᴡ ꜱᴇɴᴅ ʏᴏᴜʀ ʙᴏᴛ ᴛᴏᴋᴇɴ:</b>")
+
+CLONE_SUCCESS = (
+    "🎉 <b>ᴄʟᴏɴᴇ ᴄʀᴇᴀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!</b>\n━━━━━━━━━━━━━━\n\n"
+    "🤖 ʙᴏᴛ: <b>@{uname}</b>\n"
+    "🆔: <code>{bid}</code>\n"
+    "👤 ᴏᴡɴᴇʀ: <b>{name}</b>\n\n"
+    "✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ + ᴄᴏᴍᴍᴀɴᴅꜱ ᴀᴜᴛᴏ-ꜱᴇᴛ\n\n"
+    "📌 <b>ɴᴇxᴛ ꜱᴛᴇᴘꜱ:</b>\n"
+    "▸ /setfs — Force Subscribe\n"
+    "▸ /editstart — Customize Start Msg\n"
+    "▸ /upload — Add Anime Episodes\n\n"
+    "🚀 ʏᴏᴜʀ ʙᴏᴛ ɪꜱ ʟɪᴠᴇ ɴᴏᴡ!")
+
+ADMIN_PANEL_TXT = (
+    "🛠 <b>ᴀᴅᴍɪɴ ᴘᴀɴᴇʟ</b>\n━━━━━━━━━━━━━━\n"
+    "🤖 ʙᴏᴛ: @{uname}\n"
+    "👤 ʏᴏᴜ: <b>{role}</b>\n\n"
+    "⬇️ ꜱᴇʟᴇᴄᴛ ᴀɴ ᴏᴘᴛɪᴏɴ:")
+
+# ═════════════════════ ᴘᴇʀᴍɪꜱꜱɪᴏɴꜱ & ʀᴏʟᴇꜱ ═════════════════════
+PERMS = ["upload", "edit", "delete", "broadcast", "forcesub", "editstart", "stats",
+         "manage_admins", "thumb", "captions", "seasons", "list", "restart_upload"]
+
+PERM_LABELS = {
+    "upload": "Upload Episodes", "edit": "Edit Episodes", "delete": "Delete Episodes",
+    "broadcast": "Broadcast", "forcesub": "Force Subscribe", "editstart": "Edit Start Msg",
+    "stats": "View Statistics", "manage_admins": "Manage Admins", "thumb": "Upload Thumbnail",
+    "captions": "Manage Captions", "seasons": "Manage Seasons", "list": "Use /list",
+    "restart_upload": "Restart Upload Session",
+}
+
+ROLE_PRESETS = {
+    "owner": list(PERMS),
+    "manager": ["manage_admins", "broadcast", "upload", "edit", "delete", "stats",
+                "forcesub", "editstart", "captions", "thumb", "seasons", "list", "restart_upload"],
+    "uploader": ["upload", "edit", "seasons", "captions", "thumb", "list"],
+    "broadcaster": ["broadcast"],
+    "analyst": ["stats", "list"],
+    "custom": [],
+}
+ROLE_NAME = {"owner": "👑 Owner", "manager": "🛠 Manager", "uploader": "⬆️ Uploader",
+             "broadcaster": "📣 Broadcaster", "analyst": "📊 Analyst", "custom": "⚙️ Custom"}
+
+# ═════════════════════ ᴄᴏᴍᴍᴀɴᴅ ꜱᴇᴛꜱ (ᴀᴜᴛᴏ-ꜱᴇᴛ ɪɴ ᴛᴇʟᴇɢʀᴀᴍ) ═════════════════════
+USER_CMD_RAW = [("start", "Start Bot"), ("refer", "Refer & Earn")]
+ADMIN_CMD_RAW = [("upload", "Add Episodes"), ("edit", "Edit Episode"), ("delete", "Delete Episode"),
+                 ("broadcast", "Send Updates"), ("stats", "Statistics"), ("list", "Episode List"),
+                 ("admin", "Admin Panel"), ("setfs", "Force Subscribe"), ("editstart", "Set Start Msg"),
+                 ("giveadmin", "Add Admin"), ("editadmin", "Edit Admin"), ("remadmin", "Remove Admin"),
+                 ("done", "Finish Upload"), ("cancel", "Cancel Session")]
+FACTORY_CMD_RAW = [("clone", "Create Your Bot")]
+SUPREME_CMD_RAW = [("supreme", "Supreme Panel"), ("botlist", "All Bots"), ("db", "Database"), ("restart", "Restart Clones")]
+
+ALL_CMDS = ["start", "refer"] + [x[0] for x in ADMIN_CMD_RAW + FACTORY_CMD_RAW + SUPREME_CMD_RAW]
+FACTORY_ONLY = {"clone", "supreme", "botlist", "db", "restart"}
+
+# ═════════════════════ ɢʟᴏʙᴀʟ ꜱᴛᴀᴛᴇ ═════════════════════
+RUNNING = {}        # bot_id -> Client
+STORES = {}         # bot_id -> Store
+SESSIONS = {}       # (bot_id, uid) -> {"step":..., "data":{...}}
+RATE = {}
+LAST_UNAUTH = {}
+ACTIVE_THRO = {}
+FACTORY = None      # factory Store
+FACTORY_CLIENT = None
+
+_COLLECTIONS = ["users", "episodes", "admins", "settings", "referrals", "broadcast_logs", "activity"]
+
+# ══════════════════════════════════════════════════════════════════
+#  🗄️ ᴊꜱᴏɴ ᴅᴀᴛᴀʙᴀꜱᴇ — ᴀꜱʏɴᴄ, ᴀᴛᴏᴍɪᴄ, ᴋᴇʏᴇᴅ (ɪɴᴅᴇxᴇᴅ) ᴄᴏʟʟᴇᴄᴛɪᴏɴꜱ
+# ══════════════════════════════════════════════════════════════════
+class Store:
+    """JSON-backed document store. Docs keyed by _id = O(1) index lookups.
+       Writes are debounced + flushed atomically (tmp file + os.replace)."""
+
+    def __init__(self, path):
+        self.path = path
+        self.data = {}
+        self._dirty = False
+        self._task = None
+        self._load()
+
+    def _load(self):
+        if os.path.exists(self.path):
+            try:
+                with open(self.path, "r", encoding="utf-8") as f:
+                    self.data = json.load(f)
+                if not isinstance(self.data, dict):
+                    raise ValueError("root not dict")
+            except Exception as e:
+                LOG.error("DB Load Failed %s: %s", self.path, e)
+                try: os.replace(self.path, self.path + ".corrupt")
+                except OSError: pass
+                self.data = {}
+
+    def c(self, name):
+        return self.data.setdefault(name, {})
+
+    def get_sync(self, col, _id):
+        return self.c(col).get(str(_id))
+
+    async def get(self, col, _id):
+        return self.c(col).get(str(_id))
+
+    async def put(self, col, _id, doc):
+        self.c(col)[str(_id)] = doc
+        self.flush_soon()
+        return doc
+
+    async def update(self, col, _id, **fields):
+        d = self.c(col).get(str(_id))
+        if d is None:
+            return None
+        d.update(fields)
+        self.flush_soon()
+        return d
+
+    async def delete(self, col, _id):
+        self.c(col).pop(str(_id), None)
+        self.flush_soon()
+
+    def count(self, col):
+        return len(self.c(col))
+
+    def find(self, col, pred=None):
+        return [v for v in self.c(col).values() if pred is None or pred(v)]
+
+    def flush_soon(self):
+        self._dirty = True
+        if self._task is None or self._task.done():
+            try:
+                self._task = asyncio.get_running_loop().create_task(self._flush_later())
+            except RuntimeError:
+                pass
+
+    async def _flush_later(self):
+        await asyncio.sleep(0.4)
+        if self._dirty:
+            await self.flush()
+
+    async def flush(self):
+        self._dirty = False
+        payload = json.dumps(self.data, ensure_ascii=False, separators=(",", ":"))
+        await asyncio.to_thread(self._write, payload)
+
+    def _write(self, payload):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, self.path)
+
+    def size(self):
+        try: return os.path.getsize(self.path)
+        except OSError: return 0
+
+
+def clone_path(bid): return os.path.join(DB_DIR, f"clone_{bid}.json")
+
+def get_store(bid):
+    s = STORES.get(bid)
+    if not s:
+        s = Store(clone_path(bid))
+        STORES[bid] = s
+    return s
+
+def cfg(store):
+    return store.c("settings").get("cfg") or {}
+
+async def set_cfg(store, **kw):
+    d = dict(cfg(store)); d.update(kw)
+    await store.put("settings", "cfg", d)
+
+async def ensure_defaults(store):
+    st = store.c("settings")
+    if "cfg" not in st:
+        st["cfg"] = {"fs_mode": "off", "fs_channel": 0, "fs_username": "", "fs_link": "",
+                     "log_channel": 0, "caption": "", "owner_id": None, "created_at": now()}
+        store.flush_soon()
+    if "start" not in st:
+        st["start"] = {"type": "text", "text": DEFAULT_START}
+        store.flush_soon()
+
+# ═════════════════════ ᴛᴏᴋᴇɴ ᴇɴᴄʀʏᴘᴛɪᴏɴ (ɴᴏ ᴘʟᴀɪɴᴛᴇxᴛ!) ═════════════════════
+_FER = None
+def _fernet():
+    from cryptography.fernet import Fernet
+    secret = (str(API_HASH) + ":" + str(CLONE_BOT_ID_TOKEN or "anime-factory-v1")).encode()
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret).digest()))
+
+def enc_token(t):
+    global _FER
+    _FER = _FER or _fernet()
+    return _FER.encrypt(t.encode()).decode()
+
+def dec_token(e):
+    global _FER
+    _FER = _FER or _fernet()
+    return _FER.decrypt(e.encode()).decode()
+
+# ═════════════════════ ᴇᴘɪꜱᴏᴅᴇ ᴘᴀʀꜱᴇʀ & ꜰʟᴇxɪʙʟᴇ ꜰɪʟᴛᴇʀ ═════════════════════
+_EP_RX = [
+    re.compile(r"season\s*(\d{1,3})\s*(?:ep(?:isode)?)\s*(\d{1,3})", re.I),
+    re.compile(r"\bs\s*(\d{1,3})\s*e\s*(\d{1,3})\b", re.I),
+    re.compile(r"\b(\d{1,3})\s*[x×]\s*(\d{1,3})\b", re.I),
+]
+
+def parse_episode(text):
+    if not text: return None
+    t = re.sub(r"[._]", " ", text.strip())
+    for rx in _EP_RX:
+        m = rx.search(t)
+        if m:
+            s, e = int(m.group(1)), int(m.group(2))
+            if 1 <= s <= 999 and 1 <= e <= 999:
+                return s, e
+    return None
+
+def flexible_search(episodes_dict, query):
+    if not query or not query.strip():
+        return []
+
+    q_str = query.strip()
+
+    # 1. Check exact sX eY match
+    exact = parse_episode(q_str)
+    if exact:
+        s, e = exact
+        eid = f"{s}:{e}"
+        if eid in episodes_dict:
+            return [episodes_dict[eid]]
+
+    # 2. Extract partial filters from query
+    q_lower = q_str.lower()
+
+    # Check season filter (e.g. season 2, s2)
+    m_season = re.search(r"\b(?:season|s)\s*(\d{1,3})\b", q_lower)
+    target_season = int(m_season.group(1)) if m_season else None
+
+    # Check episode filter (e.g. episode 4, ep 4, e4)
+    m_ep = re.search(r"\b(?:episode|ep|e)\s*(\d{1,3})\b", q_lower)
+    target_ep = int(m_ep.group(1)) if m_ep else None
+
+    # Clean query text keywords
+    clean_kw = q_lower
+    clean_kw = re.sub(r"\b(?:season|s)\s*\d{1,3}\b", "", clean_kw)
+    clean_kw = re.sub(r"\b(?:episode|ep|e)\s*\d{1,3}\b", "", clean_kw)
+    clean_kw = re.sub(r"\b\d{1,3}\s*[x×]\s*\d{1,3}\b", "", clean_kw)
+    keywords = [w for w in re.split(r"\s+", clean_kw.strip()) if len(w) > 1]
+
+    results = []
+    for eid, ep in episodes_dict.items():
+        s = ep.get("season")
+        e = ep.get("episode")
+        caption = (ep.get("caption") or "").lower()
+
+        if target_season is not None and s != target_season:
+            continue
+
+        if target_ep is not None and e != target_ep:
+            continue
+
+        if keywords:
+            searchable = f"{caption} season {s} episode {e} s{s} e{e}"
+            if not all(kw in searchable for kw in keywords):
+                continue
+
+        results.append(ep)
+
+    results.sort(key=lambda x: (x.get("season", 0), x.get("episode", 0)))
+    return results
+
+def ep_id(s, e): return f"{s}:{e}"
+
+def get_media(m):
+    if m.video:
+        return "video", m.video.file_id, (m.video.thumbs[0].file_id if m.video.thumbs else None)
+    if m.animation:
+        return "animation", m.animation.file_id, (m.animation.thumbs[0].file_id if m.animation.thumbs else None)
+    if m.document:
+        return "document", m.document.file_id, (m.document.thumbs[0].file_id if m.document.thumbs else None)
+    return None, None, None
+
+# ═════════════════════ ꜱᴇꜱꜱɪᴏɴ / ʀᴀᴛᴇ / ᴘᴇʀᴍꜱ ═════════════════════
+def get_sess(c, uid): return SESSIONS.get((c.bot_id, uid))
+def set_sess(c, uid, step, **data): SESSIONS[(c.bot_id, uid)] = {"step": step, "data": data}
+def clear_sess(c, uid): SESSIONS.pop((c.bot_id, uid), None)
+
+def rate_ok(c, uid):
+    k = (c.bot_id, uid); t = now()
+    if t - RATE.get(k, 0) < 2.5: return False
+    RATE[k] = t; return True
+
+def is_supreme(uid): return uid in SUPREMES
+
+async def perm_ok(c, uid, perm):
+    if is_supreme(uid): return True
+    a = await c.store.get("admins", uid)
+    if not a: return False
+    if a.get("role") == "owner": return True
+    return perm in a.get("permissions", [])
+
+# ═════════════════════ ʟᴏɢɢɪɴɢ / ɴᴏᴛɪꜰʏ ═════════════════════
+async def dev_log(text):
+    if FACTORY is not None:
+        await FACTORY.put("developer_logs", secrets.token_hex(6), {"text": text, "at": now()})
+    if LOG_CHANNEL_ID and FACTORY_CLIENT is not None:
+        try:
+            await FACTORY_CLIENT.send_message(LOG_CHANNEL_ID, text, parse_mode=PM_OFF,
+                                              disable_web_page_preview=True)
+        except RPCError:
+            pass
+
+async def log_event(c, event, detail="", important=False, uid=None):
+    await c.store.put("activity", secrets.token_hex(5),
+                      {"event": event, "detail": detail, "uid": uid, "at": now()})
+    text = f"{event}\n{detail}\n🤖 @{c.username} | {dt(now())}"
+    lc = cfg(c.store).get("log_channel", 0)
+    if lc:
+        try: await c.send_message(lc, text, parse_mode=PM_OFF, disable_web_page_preview=True)
+        except RPCError: pass
+    if important:
+        await dev_log(text)
+
+async def touch_active(c):
+    if c.is_factory or FACTORY is None: return
+    t = now()
+    if t - ACTIVE_THRO.get(c.bot_id, 0) < 300: return
+    ACTIVE_THRO[c.bot_id] = t
+    await FACTORY.update("bots", c.bot_id, last_active=t)
+
+async def unauthorized(c, uid):
+    k = (c.bot_id, uid)
+    if now() - LAST_UNAUTH.get(k, 0) < 600: return
+    LAST_UNAUTH[k] = now()
+    await log_event(c, "🚫 ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴀᴄᴄᴇꜱꜱ ᴀᴛᴛᴇᴍᴘᴛ", f"User: {uid}", important=True, uid=uid)
+
+async def q_safe(q, text, alert=False):
+    try: await q.answer(sc(text), show_alert=alert)
+    except RPCError: pass
+
+# ═════════════════════ ᴀᴜᴛᴏ ᴄᴏᴍᴍᴀɴᴅꜱ (ꜱᴇᴛᴍʏᴄᴏᴍᴍᴀɴᴅꜱ) ═════════════════════
+def _cmds(lst): return [BotCommand(a, sc(b)) for a, b in lst]
+
+async def apply_admin_commands(c, uid):
+    lst = ADMIN_CMD_RAW + (FACTORY_CMD_RAW + SUPREME_CMD_RAW if c.is_factory and is_supreme(uid) else [])
+    try:
+        await c.set_bot_commands(_cmds(lst), scope=BotCommandScopeChat(chat_id=int(uid)))
+    except Exception as e:
+        LOG.debug("set_bot_commands admin failed: %s", e)
+
+async def apply_commands(c):
+    base = USER_CMD_RAW + (FACTORY_CMD_RAW if c.is_factory else [])
+    try:
+        await c.set_bot_commands(_cmds(base), scope=BotCommandScopeDefault())
+    except Exception as e:
+        LOG.debug("set_bot_commands default failed: %s", e)
+    for uid in list(c.store.c("admins").keys()):
+        await apply_admin_commands(c, int(uid))
+    if c.is_factory:
+        for uid in SUPREMES:
+            await apply_admin_commands(c, uid)
+
+# ═════════════════════ ᴜꜱᴇʀꜱ / ꜰᴏʀᴄᴇ-ꜱᴜʙ / ꜱᴛᴀʀᴛ ═════════════════════
+async def ensure_user(c, tu):
+    uid = str(tu.id)
+    u = await c.store.get("users", uid)
+    if u:
+        if u.get("last_seen", 0) < now() - 3600:
+            await c.store.update("users", uid, last_seen=now())
+        return u
+    u = {"_id": uid, "first_name": (tu.first_name or "")[:64], "username": (tu.username or ""),
+         "started_at": now(), "last_seen": now(), "fs_verified": False}
+    await c.store.put("users", uid, u)
+    await log_event(c, "🆕 ɴᴇᴡ ᴜꜱᴇʀ", f"Chat: {uid} (@{u['username']})", important=True, uid=tu.id)
+    await touch_active(c)
+    return u
+
+async def fs_state(c, uid):
+    """Returns (ok, keyboard|None)."""
+    st = cfg(c.store)
+    mode = st.get("fs_mode", "off")
+    if mode == "off": return True, None
+    if is_supreme(uid): return True, None
+    a = await c.store.get("admins", uid)
+    if a or st.get("owner_id") == uid: return True, None
+    u = await c.store.get("users", uid)
+    if mode == "public":
+        ok = False
+        try:
+            mem = await c.get_chat_member(st.get("fs_channel"), uid)
+            ok = mem.status in (CMS.MEMBER, CMS.ADMINISTRATOR, CMS.OWNER)
+        except UserNotParticipant:
+            ok = False
+        except RPCError:
+            ok = False
+        if ok:
+            if u: await c.store.update("users", uid, fs_verified=True)
+            return True, None
+        if not st.get("fs_username"): return True, None
+        kb = InlineKeyboardMarkup([[ubtn("🔗 ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ", f"https://t.me/{st['fs_username']}")],
+                                   [btn("✅ ᴠᴇʀɪꜰʏ ɴᴏᴡ", "ckfs")]])
+        return False, kb
+    # private request mode
+    if u and u.get("fs_verified"): return True, None
+    if not st.get("fs_link"): return True, None
+    kb = InlineKeyboardMarkup([[ubtn("🔗 ʀᴇQᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ", st["fs_link"])],
+                               [btn("✅ ᴠᴇʀɪꜰʏ ɴᴏᴡ", "ckfs")]])
+    return False, kb
+
+async def convert_referral(c, uid):
+    pend = [r for r in c.store.find("referrals")
+            if r.get("user") == str(uid) and r.get("status") == "pending"]
+    for r in pend:
+        await c.store.update("referrals", r["_id"], status="converted", converted_at=now())
+        await log_event(c, "🤝 ʀᴇꜰᴇʀʀᴀʟ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟ", f"Ref: {r['referrer']} → {uid}", uid=uid)
+        try:
+            await c.send_message(int(r["referrer"]), "🎉 <b>ɴᴇᴡ ʀᴇꜰᴇʀʀᴀʟ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟ!</b>\n\n🎁 Keep sharing!", parse_mode=PM_HTML)
+        except RPCError:
+            pass
+
+def render_text(template, user, c):
+    name = hesc(user.get("first_name") or "User")
+    uname = hesc(user.get("username") or user.get("_id", ""))
+    return (template.replace("{name}", name).replace("{username}", uname)
+            .replace("{botname}", hesc(c.username)))
+
+async def send_start_content(c, chat_id, user):
+    s = c.store.c("settings").get("start") or {"type": "text", "text": DEFAULT_START}
+    text = render_text(s.get("text") or DEFAULT_START, user or {}, c)
+    if c.is_factory:
+        rows = [[btn("🤖 ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ʙᴏᴛ", "cloneme")], [btn("🎁 ʀᴇꜰᴇʀ & ᴇᴀʀɴ", "rf|menu")]]
+    else:
+        rows = [[btn("🔍 ʜᴏᴡ ᴛᴏ ꜱᴇᴀʀᴄʜ", "fmt"), btn("🎁 ʀᴇꜰᴇʀ & ᴇᴀʀɴ", "rf|menu")]]
+    kb = InlineKeyboardMarkup(rows)
+    t = s.get("type", "text")
+    try:
+        if t == "photo" and s.get("file_id"):
+            await c.send_photo(chat_id, s["file_id"], caption=text, parse_mode=PM_HTML, reply_markup=kb)
+        elif t == "video" and s.get("file_id"):
+            await c.send_video(chat_id, s["file_id"], caption=text, parse_mode=PM_HTML, reply_markup=kb)
+        elif t == "animation" and s.get("file_id"):
+            await c.send_animation(chat_id, s["file_id"], caption=text, parse_mode=PM_HTML, reply_markup=kb)
+        elif t == "document" and s.get("file_id"):
+            await c.send_document(chat_id, s["file_id"], caption=text, parse_mode=PM_HTML, reply_markup=kb)
+        else:
+            await c.send_message(chat_id, text, parse_mode=PM_HTML, reply_markup=kb,
+                                 disable_web_page_preview=True)
+    except RPCError as e:
+        LOG.warning("Start content fallback: %s", e)
+        try:
+            await c.send_message(chat_id, text, parse_mode=PM_HTML, reply_markup=kb,
+                                 disable_web_page_preview=True)
+        except RPCError:
+            pass
+
+# ═════════════════════ ᴇᴘɪꜱᴏᴅᴇ ᴅᴇʟɪᴠᴇʀʏ & ꜱᴇᴀʀᴄʜ ═════════════════════
+def build_caption(c, ep, user):
+    st = cfg(c.store)
+    base = ep.get("caption") or st.get("caption") or DEFAULT_CAPTION
+    name = hesc(user.get("first_name") or "Anime Fan") if user else "Anime Fan"
+    uname = hesc(user.get("username") or "—") if user else "—"
+    return (base.replace("{season}", str(ep["season"])).replace("{episode}", str(ep["episode"]))
+                .replace("{name}", name).replace("{username}", uname)
+                .replace("{botname}", c.username or "bot"))
+
+async def resolve_thumb(c, ep):
+    p = ep.get("thumb_path")
+    if p and os.path.exists(p): return p
+    tid = ep.get("thumb_id")
+    if not tid: return None
+    path = os.path.join(THUMB_DIR, f"{c.bot_id}_{ep['season']}_{ep['episode']}.jpg")
+    try:
+        out = await c.download_media(tid, file_name=path)
+        ep["thumb_path"] = out or path
+        c.store.flush_soon()
+        return ep["thumb_path"]
+    except RPCError:
+        return None
+
+async def save_episode(c, uid, s, e, file_id, mtype, caption, thumb_id):
+    doc = {"_id": ep_id(s, e), "season": s, "episode": e, "file_id": file_id, "type": mtype,
+           "caption": caption or "", "thumb_id": thumb_id, "thumb_path": None,
+           "uploaded_by": uid, "created_at": now(), "updated_at": now()}
+    await c.store.put("episodes", doc["_id"], doc)
+    await touch_active(c)
+    await log_event(c, "🎬 ᴇᴘɪꜱᴏᴅᴇ ᴜᴘʟᴏᴀᴅᴇᴅ", f"S{s} E{e}", important=True, uid=uid)
+    return doc
+
+async def send_episode(c, chat_id, s, e, user=None):
+    ep = await c.store.get("episodes", ep_id(s, e))
+    if not ep:
+        return False
+    if user is None:
+        user = await c.store.get("users", str(chat_id))
+    caption = build_caption(c, ep, user)
+    kb = InlineKeyboardMarkup([[btn("▶️ ɴᴇxᴛ ᴇᴘɪꜱᴏᴅᴇ ▶️", f"next|{s}:{e}")]])
+    thumb = await resolve_thumb(c, ep)
+    t = ep.get("type", "video")
+    sent = False
+    for attempt in range(2):
+        try:
+            if t == "animation":
+                await c.send_animation(chat_id, ep["file_id"], caption=caption, parse_mode=PM_HTML, reply_markup=kb)
+            elif t == "document":
+                await c.send_document(chat_id, ep["file_id"], caption=caption, parse_mode=PM_HTML,
+                                      reply_markup=kb, thumb=thumb)
+            else:
+                await c.send_video(chat_id, ep["file_id"], caption=caption, parse_mode=PM_HTML,
+                                   reply_markup=kb, thumb=thumb)
+            sent = True
+            break
+        except FloodWait as f:
+            if attempt == 0:
+                await asyncio.sleep(min(f.value, 60))
+        except RPCError as ex:
+            LOG.error("send_episode: %s", ex)
+            break
+    if not sent:
+        try:
+            await c.send_message(chat_id, "⚠️ <b>ꜰᴀɪʟᴇᴅ ᴛᴏ ꜱᴇɴᴅ ꜰɪʟᴇ.</b> Try again later.", parse_mode=PM_HTML)
+        except RPCError:
+            pass
+        return True
+    await touch_active(c)
+    await c.store.put("activity", secrets.token_hex(5),
+                      {"event": "📤 ᴇᴘɪꜱᴏᴅᴇ ꜱᴇɴᴛ", "detail": f"S{s} E{e} → {chat_id}", "uid": chat_id, "at": now()})
+    return True
+
+# ═════════════════════ ᴄᴏᴍᴍᴀɴᴅ ʜᴀɴᴅʟᴇʀꜱ ═════════════════════
+async def cmd_start(c, m):
+    uid = m.from_user.id
+    user = await ensure_user(c, m.from_user)
+    payload = m.command[1] if len(m.command) > 1 else ""
+    if payload.startswith("ref_"):
+        ref = payload[4:]
+        if ref.isdigit() and int(ref) != uid:
+            rid = f"{int(ref)}_{uid}"
+            if not await c.store.get("referrals", rid) and await c.store.get("users", int(ref)):
+                await c.store.put("referrals", rid, {"_id": rid, "referrer": str(int(ref)),
+                                                     "user": str(uid), "status": "pending", "at": now()})
+                await log_event(c, "🤝 ɴᴇᴡ ʀᴇꜰᴇʀʀᴀʟ", f"{ref} → {uid}", uid=uid)
+    ok, kb = await fs_state(c, uid)
+    if not ok:
+        await unauthorized(c, uid)
+        try:
+            await m.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b>\n\nJoin the channel then press ✅ ᴠᴇʀɪꜰʏ.",
+                          reply_markup=kb, parse_mode=PM_HTML, disable_web_page_preview=True)
+        except RPCError:
+            pass
+        return
+    await convert_referral(c, uid)
+    await send_start_content(c, m.chat.id, user)
+
+async def episode_request(c, m):
+    uid = m.from_user.id
+    if not rate_ok(c, uid): return
+    ok, kb = await fs_state(c, uid)
+    if not ok:
+        await unauthorized(c, uid)
+        try:
+            await m.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b> Join the channel first.",
+                          reply_markup=kb, parse_mode=PM_HTML, disable_web_page_preview=True)
+        except RPCError:
+            pass
+        return
+
+    query = (m.text or "").strip()
+    matches = flexible_search(c.store.c("episodes"), query)
+
+    if len(matches) == 1:
+        ep = matches[0]
+        await send_episode(c, uid, ep["season"], ep["episode"])
+        return
+
+    if len(matches) > 1:
+        rows = []
+        for ep in matches[:10]:
+            s, e = ep["season"], ep["episode"]
+            rows.append([btn(f"🎬 ꜱᴇᴀꜱᴏɴ {s} • ᴇᴘɪꜱᴏᴅᴇ {e}", f"ep|{s}:{e}")])
+
+        txt = (f"🔍 <b>ꜱᴇᴀʀᴄʜ ʀᴇꜱᴜʟᴛꜱ ꜰᴏʀ:</b> <code>{hesc(query)}</code>\n"
+               f"━━━━━━━━━━━━━━\n"
+               f"✨ Found <b>{len(matches)}</b> matching episodes!\n"
+               f"👇 Tap below to watch:")
+        await m.reply(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        return
+
+    # No matches found -> Show clean guide + available season buttons
+    seasons = sorted({int(k.split(":")[0]) for k in c.store.c("episodes")})
+    if seasons:
+        kb_rows = [[btn(f"📚 ꜱᴇᴀꜱᴏɴ {x}", f"sea|{x}") for x in seasons[:5]]]
+        await m.reply(f"❌ <b>ɴᴏ ᴇᴘɪꜱᴏᴅᴇꜱ ꜰᴏᴜɴᴅ ꜰᴏʀ:</b> <code>{hesc(query)}</code>\n\n"
+                      f"💡 <b>ᴛʀʏ ꜱᴇᴀʀᴄʜɪɴɢ:</b>\n"
+                      f"▸ S1 E4 / Season 1 Episode 4\n"
+                      f"▸ Season 1 / S1\n"
+                      f"▸ Anime Keyword\n\n"
+                      f"📚 <b>ᴀᴠᴀɪʟᴀʙʟᴇ ꜱᴇᴀꜱᴏɴꜱ:</b>",
+                      reply_markup=InlineKeyboardMarkup(kb_rows), parse_mode=PM_HTML)
+    else:
+        await m.reply("❌ <b>ɴᴏ ᴇᴘɪꜱᴏᴅᴇꜱ ᴜᴘʟᴏᴀᴅᴇᴅ ʏᴇᴛ!</b>\n\nCome back soon ✨", parse_mode=PM_HTML)
+
+# ─────────── ʀᴇꜰᴇʀ ───────────
+def refer_stats(store, uid):
+    mine = [r for r in store.find("referrals") if r.get("referrer") == str(uid)]
+    conv = [r for r in mine if r.get("status") == "converted"]
+    return len(mine), len(conv)
+
+def ranking_text(store):
+    agg = {}
+    for r in store.c("referrals").values():
+        ref = r.get("referrer")
+        a = agg.setdefault(ref, [0, 0]); a[0] += 1
+        if r.get("status") == "converted": a[1] += 1
+    top = sorted(agg.items(), key=lambda kv: (-kv[1][1], -kv[1][0]))[:10]
+    medals = ["🥇", "🥈", "🥉"]
+    lines = [f"{medals[i] if i < 3 else '🔹'} <code>{ref}</code> — ✅ {conv}/{tot}"
+             for i, (ref, (tot, conv)) in enumerate(top)]
+    return "🏆 <b>ʀᴇꜰᴇʀʀᴀʟ ʀᴀɴᴋɪɴɢ</b>\n━━━━━━━━━━━━━━\n" + ("\n".join(lines) if lines else "No referrals yet.")
+
+async def send_refer(c, chat_id, uid):
+    store = c.store
+    invited, conv = refer_stats(store, uid)
+    rate = f"{(conv / invited * 100):.1f}" if invited else "0.0"
+    link = f"https://t.me/{c.username}?start=ref_{uid}"
+    txt = (f"🎁 <b>ʀᴇꜰᴇʀ & ᴇᴀʀɴ</b>\n━━━━━━━━━━━━━━\n"
+           f"🔗 <code>{link}</code>\n\n"
+           f"👥 Invited Users: <b>{invited}</b>\n"
+           f"✅ Successful Joins: <b>{conv}</b>\n"
+           f"📈 Conversion Rate: <b>{rate}%</b>\n"
+           f"🤖 Bot: @{c.username}\n"
+           f"🌍 Total Bot Users: <b>{store.count('users')}</b>")
+    kb = InlineKeyboardMarkup([
+        [ubtn("🟢 ꜱʜᴀʀᴇ ʙᴏᴛ", f"https://t.me/share/url?url={quote(link)}&text={quote('🎬 Watch Anime Free!')}")],
+        [btn("🔵 ᴄᴏᴘʏ ʟɪɴᴋ", "rf|link"), btn("🟣 ʀᴇꜰᴇʀʀᴀʟ ꜱᴛᴀᴛꜱ", "rf|stats")]])
+    await c.send_message(chat_id, txt, parse_mode=PM_HTML, disable_web_page_preview=True, reply_markup=kb)
+
+async def cmd_refer(c, m):
+    await ensure_user(c, m.from_user)
+    await send_refer(c, m.chat.id, m.from_user.id)
+
+# ─────────── ᴜᴘʟᴏᴀᴅ ───────────
+def upload_menu_kb():
+    return InlineKeyboardMarkup([
+        [btn("🟢 ᴀᴅᴅ ᴇᴘɪꜱᴏᴅᴇ", "up|ep"), btn("🔵 ɴᴇᴡ ꜱᴇᴀꜱᴏɴ", "up|ns")],
+        [btn("🔴 ᴄᴀɴᴄᴇʟ", "up|cancel")]])
+
+async def show_upload_menu(c, chat_id, edit_msg=None):
+    txt = ("⬆️ <b>ᴜᴘʟᴏᴀᴅ ᴄᴇɴᴛᴇʀ</b>\n━━━━━━━━━━━━━━\n"
+           "🟢 <b>Add Episode</b> — Single Episode\n"
+           "🔵 <b>New Season</b> — Batch from Ep 1\n"
+           "🏁 /done • ❌ /cancel")
+    if edit_msg is not None:
+        try: await edit_msg.edit_text(txt, reply_markup=upload_menu_kb(), parse_mode=PM_HTML)
+        except RPCError: pass
+    else:
+        await c.send_message(chat_id, txt, reply_markup=upload_menu_kb(), parse_mode=PM_HTML)
+
+async def cmd_upload(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "upload"):
+        await m.reply("❌ <b>NO UPLOAD PERMISSION!</b>", parse_mode=PM_HTML); return
+    s = get_sess(c, uid)
+    if s and str(s.get("step", "")).startswith(("up_", "ns_")):
+        if await perm_ok(c, uid, "restart_upload"):
+            await show_upload_menu(c, m.chat.id); return
+        await m.reply("♻️ <b>UPLOAD SESSION ALREADY ACTIVE!</b>\n\nSend /done to finish or /cancel",
+                      parse_mode=PM_HTML); return
+    set_sess(c, uid, "up_menu")
+    await show_upload_menu(c, m.chat.id)
+
+async def up_got_video(c, m):
+    uid = m.from_user.id
+    mtype, fid, tid = get_media(m)
+    if not fid:
+        await m.reply("📤 Send a <b>video</b> file now...", parse_mode=PM_HTML); return
+    s = get_sess(c, uid)
+    s["data"].update({"file_id": fid, "type": mtype, "thumb_id": tid,
+                      "caption": m.caption or ""})
+    s["step"] = "up_ref"
+    await m.reply("🏷️ <b>ꜱᴇɴᴅ ʀᴇꜰᴇʀᴇɴᴄᴇ:</b>\n\n▸ Season 2 Episode 6\n▸ S2 E6",
+                  parse_mode=PM_HTML, disable_web_page_preview=True)
+
+async def up_got_ref(c, m):
+    uid = m.from_user.id
+    pe = parse_episode(m.text)
+    if not pe:
+        await m.reply(INVALID_FMT, parse_mode=PM_HTML); return
+    s, e = pe
+    sess = get_sess(c, uid)
+    if await c.store.get("episodes", ep_id(s, e)):
+        await m.reply(f"⚠️ <b>S{s} E{e} ALREADY EXISTS!</b>\n\nUse /edit to replace it. Send another reference:",
+                      parse_mode=PM_HTML)
+        return
+    d = sess["data"]
+    await save_episode(c, uid, s, e, d["file_id"], d["type"], d.get("caption"), d.get("thumb_id"))
+    d["added"] = d.get("added", 0) + 1
+    sess["step"] = "up_video"
+    await m.reply(f"✅ <b>Uploaded — S{s} E{e}</b>\n\n📤 Send next video or press 👇",
+                  parse_mode=PM_HTML,
+                  reply_markup=InlineKeyboardMarkup([[btn("🟢 ᴀᴅᴅ ᴀɴᴏᴛʜᴇʀ", "up|ep"), btn("🏁 ᴅᴏɴᴇ", "up|done")]]))
+
+async def ns_got_season(c, m):
+    uid = m.from_user.id
+    txt = (m.text or "").strip()
+    if not txt.isdigit() or not (1 <= int(txt) <= 999):
+        await m.reply("🔢 Send a valid season number (ex: 2):", parse_mode=PM_HTML); return
+    if not (await perm_ok(c, uid, "seasons") or await perm_ok(c, uid, "upload")):
+        await m.reply("❌ <b>NO SEASONS PERMISSION!</b>", parse_mode=PM_HTML); clear_sess(c, uid); return
+    s = get_sess(c, uid)
+    s["data"].update({"ns_season": int(txt), "ns_ep": 1, "added": 0})
+    s["step"] = "ns_video"
+    await m.reply(f"🆕 <b>Season {txt} Started — Episode 1!</b>\n\n📤 Send videos one by one...\n🏁 /done • ❌ /cancel",
+                  parse_mode=PM_HTML)
+
+async def ns_got_video(c, m):
+    uid = m.from_user.id
+    mtype, fid, tid = get_media(m)
+    if not fid:
+        await m.reply("📤 Send a <b>video</b> file:", parse_mode=PM_HTML); return
+    s = get_sess(c, uid); d = s["data"]
+    sn, en = d["ns_season"], d["ns_ep"]
+    if await c.store.get("episodes", ep_id(sn, en)):
+        await m.reply(f"⚠️ S{sn} E{en} already exists — skipped!", parse_mode=PM_HTML)
+        d["ns_ep"] = en + 1
+        return
+    await save_episode(c, uid, sn, en, fid, mtype, m.caption or "", tid)
+    d["ns_ep"] = en + 1
+    d["added"] = d.get("added", 0) + 1
+    await m.reply(f"✅ <b>S{sn} E{en} Added!</b>\n\n📤 Send next video or /done", parse_mode=PM_HTML)
+
+async def cmd_done(c, m):
+    uid = m.from_user.id
+    s = get_sess(c, uid)
+    if s and s["step"] == "ns_video":
+        d = s["data"]
+        await m.reply(f"🏁 <b>Season {d['ns_season']} Complete!</b>\n\n✅ {d.get('added', 0)} episodes added",
+                      parse_mode=PM_HTML)
+        await log_event(c, "🏁 ꜱᴇᴀꜱᴏɴ ʙᴀᴛᴄʜ ᴅᴏɴᴇ", f"S{d['ns_season']} • {d.get('added',0)} eps", uid=uid)
+        clear_sess(c, uid)
+    elif s and str(s["step"]).startswith("up_"):
+        await m.reply(f"🏁 <b>Upload Session Finished!</b>\n\n✅ {s['data'].get('added', 0)} episodes added",
+                      parse_mode=PM_HTML)
+        clear_sess(c, uid)
+    else:
+        await m.reply("❌ No active upload session.")
+
+async def cmd_cancel(c, m):
+    clear_sess(c, m.from_user.id)
+    await m.reply("❌ <b>Cancelled!</b>", parse_mode=PM_HTML)
+
+# ─────────── ᴇᴅɪᴛ / ᴅᴇʟᴇᴛᴇ ───────────
+def edit_kb(s, e):
+    return InlineKeyboardMarkup([
+        [btn("🎬 Replace Video", f"ed|video|{s}:{e}"), btn("✏️ Edit Caption", f"ed|cap|{s}:{e}")],
+        [btn("🖼️ Replace Thumb", f"ed|thumb|{s}:{e}")],
+        [btn("⬅️ Back", "pan|refresh")]])
+
+async def show_editor(c, chat_id, s, e):
+    ep = await c.store.get("episodes", ep_id(s, e))
+    if not ep:
+        await c.send_message(chat_id, f"❌ S{s} E{e} not found!"); return
+    txt = (f"✏️ <b>Edit — S{s} E{e}</b>\n━━━━━━━━━━━━━━\n"
+           f"🎬 Type: {ep.get('type','video')}\n"
+           f"📝 Caption: {(ep.get('caption') or '—')[:80]}\n"
+           f"🖼️ Thumb: {'✅' if ep.get('thumb_id') or ep.get('thumb_path') else '❌'}\n"
+           f"⏰ Updated: {dt(ep.get('updated_at', 0))}\n\nSelect:")
+    await c.send_message(chat_id, txt, reply_markup=edit_kb(s, e), parse_mode=PM_HTML)
+
+async def cmd_edit(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "edit"):
+        await m.reply("❌ <b>NO EDIT PERMISSION!</b>", parse_mode=PM_HTML); return
+    ref = " ".join(m.command[1:])
+    if ref:
+        pe = parse_episode(ref)
+        if not pe:
+            await m.reply(INVALID_FMT, parse_mode=PM_HTML); return
+        await show_editor(c, m.chat.id, *pe); return
+    set_sess(c, uid, "ed_ref")
+    await m.reply("✏️ Send episode reference:\n\n▸ Season 1 Episode 4\n▸ S1 E4",
+                  parse_mode=PM_HTML, disable_web_page_preview=True)
+
+async def ed_got_ref(c, m):
+    pe = parse_episode(m.text)
+    if not pe:
+        await m.reply(INVALID_FMT, parse_mode=PM_HTML); return
+    clear_sess(c, m.from_user.id)
+    await show_editor(c, m.chat.id, *pe)
+
+async def cmd_delete(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "delete"):
+        await m.reply("❌ <b>NO DELETE PERMISSION!</b>", parse_mode=PM_HTML); return
+    ref = " ".join(m.command[1:])
+    if not ref:
+        set_sess(c, uid, "del_ref")
+        await m.reply("🗑️ Send episode reference to delete:\n\n▸ Season 1 Episode 4", parse_mode=PM_HTML)
+        return
+    pe = parse_episode(ref)
+    if not pe:
+        await m.reply(INVALID_FMT, parse_mode=PM_HTML); return
+    await do_delete(c, m.chat.id, *pe)
+
+async def do_delete(c, chat_id, s, e):
+    if not await c.store.get("episodes", ep_id(s, e)):
+        await c.send_message(chat_id, f"❌ S{s} E{e} not found!"); return
+    await c.store.delete("episodes", ep_id(s, e))
+    await log_event(c, "🗑️ ᴇᴘɪꜱᴏᴅᴇ ᴅᴇʟᴇᴛᴇᴅ", f"S{s} E{e}", important=True)
+    await c.send_message(chat_id, f"🗑️ <b>Deleted — S{s} E{e}</b>", parse_mode=PM_HTML)
+
+# ─────────── ʙʀᴏᴀᴅᴄᴀꜱᴛ ───────────
+async def copy_any(c, chat_id, m):
+    if m.text:
+        return await c.send_message(chat_id, m.text, entities=m.entities, parse_mode=PM_OFF,
+                                    disable_web_page_preview=True)
+    cap = m.caption; cape = m.caption.entities if m.caption else None
+    if m.photo:
+        return await c.send_photo(chat_id, m.photo.file_id, caption=cap, caption_entities=cape, parse_mode=PM_OFF)
+    if m.video:
+        return await c.send_video(chat_id, m.video.file_id, caption=cap, caption_entities=cape, parse_mode=PM_OFF)
+    if m.animation:
+        return await c.send_animation(chat_id, m.animation.file_id, caption=cap, caption_entities=cape, parse_mode=PM_OFF)
+    if m.audio:
+        return await c.send_audio(chat_id, m.audio.file_id, caption=cap, caption_entities=cape, parse_mode=PM_OFF)
+    if m.document:
+        return await c.send_document(chat_id, m.document.file_id, caption=cap, caption_entities=cape, parse_mode=PM_OFF)
+    if m.sticker:
+        return await c.send_sticker(chat_id, m.sticker.file_id)
+    if m.voice:
+        return await c.send_voice(chat_id, m.voice.file_id, caption=cap, caption_entities=cape, parse_mode=PM_OFF)
+    if m.video_note:
+        return await c.send_video_note(chat_id, m.video_note.file_id)
+    raise ValueError("Unsupported Media")
+
+async def edit_progress(msg, done, total, ok, fail):
+    try:
+        await msg.edit_text(f"📣 <b>ʙʀᴏᴀᴅᴄᴀꜱᴛ ʀᴜɴɴɪɴɢ...</b>\n━━━━━━━━━━━━━━\n"
+                            f"👥 Total: <b>{total}</b>\n📡 Sent: <b>{done}/{total}</b>\n"
+                            f"✅ Success: <b>{ok}</b>\n❌ Failed: <b>{fail}</b>", parse_mode=PM_HTML)
+    except FloodWait as f:
+        await asyncio.sleep(f.value)
+    except RPCError:
+        pass
+
+async def cmd_broadcast(c, m):
+    uid = m.from_user.id
+    src = m.reply_to_message
+    args = m.command[1:]
+    plan = []
+    if c.is_factory and is_supreme(uid) and args:
+        scope = args[0].lower()
+        if scope == "all":
+            for bid, cl in RUNNING.items():
+                if cl.store.count("users") > 0:
+                    plan.append((cl, f"@{cl.username}"))
+            if not plan:
+                await m.reply("❌ No users found."); return
+        elif scope.isdigit():
+            bid = int(scope)
+            cl = RUNNING.get(bid)
+            if not cl:
+                await m.reply(f"🔴 Bot {bid} not running — use /restart"); return
+            plan = [(cl, f"@{cl.username}")]
+        else:
+            if not await perm_ok(c, uid, "broadcast"):
+                await m.reply("❌ <b>NO BROADCAST PERMISSION!</b>", parse_mode=PM_HTML); return
+            plan = [(c, f"@{c.username}")]
+    else:
+        if not await perm_ok(c, uid, "broadcast"):
+            await m.reply("❌ <b>NO BROADCAST PERMISSION!</b>", parse_mode=PM_HTML); return
+        plan = [(c, f"@{c.username}")]
+    if src is None:
+        await m.reply("📣 Reply to any message with <code>/broadcast</code>", parse_mode=PM_HTML); return
+    status = await m.reply("📣 <b>Starting broadcast...</b>", parse_mode=PM_HTML)
+    await log_event(c, "📣 ʙʀᴏᴀᴅᴄᴀꜱᴛ ꜱᴛᴀʀᴛᴇᴅ", f"By: {uid} | Scope: {', '.join(x[1] for x in plan)}",
+                    important=True, uid=uid)
+    total = sum(cl.store.count("users") for cl, _ in plan)
+    done = ok = fail = 0
+    for cl, label in plan:
+        users = list(cl.store.c("users").keys())
+        for u in users:
+            try:
+                await copy_any(cl, int(u), src)
+                ok += 1
+            except FloodWait as f:
+                await asyncio.sleep(f.value)
+                try:
+                    await copy_any(cl, int(u), src); ok += 1
+                except RPCError:
+                    fail += 1
+            except (UserIsBlocked, InputUserDeactivated, PeerIdInvalid):
+                fail += 1
+            except RPCError:
+                fail += 1
+            except Exception:
+                fail += 1
+            done += 1
+            if done % 15 == 0:
+                await edit_progress(status, done, total, ok, fail)
+            await asyncio.sleep(0.05)
+        await cl.store.put("broadcast_logs", secrets.token_hex(5),
+                           {"scope": label, "total": len(users), "success": ok, "failed": fail,
+                            "by": uid, "at": now()})
+        await touch_active(cl)
+    try:
+        await status.edit_text(f"📣 <b>ʙʀᴏᴀᴅᴄᴀꜱᴛ ꜰɪɴɪꜱʜᴇᴅ!</b>\n━━━━━━━━━━━━━━\n"
+                               f"👥 Total: <b>{total}</b>\n✅ Success: <b>{ok}</b>\n"
+                               f"❌ Failed: <b>{fail}</b>\n🎯 Rate: <b>{(ok/total*100 if total else 0):.1f}%</b>",
+                               parse_mode=PM_HTML)
+    except RPCError:
+        pass
+    await log_event(c, "📣 ʙʀᴏᴀᴅᴄᴀꜱᴛ ꜰɪɴɪꜱʜᴇᴅ", f"✅ {ok} | ❌ {fail}", important=True, uid=uid)
+
+# ─────────── ꜱᴛᴀᴛꜱ / ʟɪꜱᴛ ───────────
+def store_db_size(store): return store.size()
+
+def build_bot_stats(c):
+    store = c.store
+    users = store.count("users")
+    today = sum(1 for u in store.c("users").values() if u.get("started_at", 0) >= DAY_START())
+    eps = store.count("episodes")
+    seasons = len({k.split(":")[0] for k in store.c("episodes")})
+    admins = store.count("admins")
+    bcs = store.count("broadcast_logs")
+    meta = FACTORY.get_sync("bots", c.bot_id) if FACTORY else None
+    created = dt(meta["created_at"]) if meta else dt(cfg(store).get("created_at", START_TS))
+    return (f"📊 <b>ʙᴏᴛ ꜱᴛᴀᴛɪꜱᴛɪᴄꜱ</b>\n━━━━━━━━━━━━━━\n"
+            f"🤖 Bot: @{c.username}\n"
+            f"👥 Users: <b>{users}</b>\n"
+            f"🆕 Today's Users: <b>{today}</b>\n"
+            f"🎬 Episodes: <b>{eps}</b>\n"
+            f"📚 Seasons: <b>{seasons}</b>\n"
+            f"💾 DB Size: <b>{human_size(store_db_size(store))}</b>\n"
+            f"🗄️ Storage Used: <b>{human_size(store.size())}</b>\n"
+            f"⏱️ Uptime: <b>{hms(now() - START_TS)}</b>\n"
+            f"📅 Created: {created}\n"
+            f"🛡️ Admins: <b>{admins}</b>\n"
+            f"📣 Broadcasts: <b>{bcs}</b>")
+
+def build_global_stats():
+    tb = FACTORY.count("bots") if FACTORY else 0
+    tu = te = today = 0
+    for st in [FACTORY] + list(STORES.values()):
+        if st is None: continue
+        tu += st.count("users")
+        te += st.count("episodes")
+        today += sum(1 for u in st.c("users").values() if u.get("started_at", 0) >= DAY_START())
+    size = sum(os.path.getsize(os.path.join(DB_DIR, f)) for f in os.listdir(DB_DIR)
+               if f.endswith(".json")) if os.path.isdir(DB_DIR) else 0
+    return (f"🌐 <b>ꜱᴜᴘʀᴇᴍᴇ ꜱᴛᴀᴛɪꜱᴛɪᴄꜱ</b>\n━━━━━━━━━━━━━━\n"
+            f"🤖 Total Bots: <b>{tb}</b> (🟢 {len(RUNNING) - 1 if FACTORY_CLIENT else len(RUNNING)} running)\n"
+            f"👥 Total Users: <b>{tu}</b>\n"
+            f"🎬 Total Episodes: <b>{te}</b>\n"
+            f"🆕 Today's Users: <b>{today}</b>\n"
+            f"💾 Storage: <b>{human_size(size)}</b>\n"
+            f"⏱️ Uptime: <b>{hms(now() - START_TS)}</b>")
+
+async def cmd_stats(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "stats"):
+        await m.reply("❌ <b>NO STATS PERMISSION!</b>", parse_mode=PM_HTML); return
+    if c.is_factory and is_supreme(uid):
+        await m.reply(build_global_stats(), parse_mode=PM_HTML)
+    else:
+        await m.reply(build_bot_stats(c), parse_mode=PM_HTML)
+
+async def cmd_list(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "list"):
+        await m.reply("❌ <b>NO LIST PERMISSION!</b>", parse_mode=PM_HTML); return
+    seasons = {}
+    for k, v in c.store.c("episodes").items():
+        seasons.setdefault(v["season"], []).append(v["episode"])
+    if not seasons:
+        await m.reply("📭 No episodes yet."); return
+    text = f"📺 <b>ᴇᴘɪꜱᴏᴅᴇ ʟɪꜱᴛ</b>\n━━━━━━━━━━━━━━\n"
+    for s in sorted(seasons):
+        text += f"\n🟣 <b>Season {s}</b>\n"
+        for e in sorted(seasons[s]):
+            text += f"   ▸ Episode {e}\n"
+    for part in chunk(text):
+        try:
+            await m.reply(part, parse_mode=PM_HTML, disable_web_page_preview=True)
+        except RPCError:
+            pass
+        await asyncio.sleep(0.3)
+
+# ─────────── ᴀᴅᴍɪɴ ᴘᴀɴᴇʟ ───────────
+def admin_panel_kb():
+    return InlineKeyboardMarkup([
+        [btn("🟢 Upload", "pan|upload"), btn("🔵 Edit", "pan|edit"), btn("🔴 Delete", "pan|del")],
+        [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "pan|list")],
+        [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")]])
+
+async def cmd_admin(c, m):
+    uid = m.from_user.id
+    doc = await c.store.get("admins", uid)
+    if not doc and not is_supreme(uid):
+        await m.reply("❌ You're not an admin here."); return
+    role = ROLE_NAME.get(doc["role"], doc["role"]) if doc else "👑 Supreme"
+    await m.reply(ADMIN_PANEL_TXT.format(uname=c.username, role=role),
+                  reply_markup=admin_panel_kb(), parse_mode=PM_HTML)
+
+# ─────────── ᴀᴅᴍɪɴ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ (ɢɪᴠᴇ/ᴇᴅɪᴛ/ʀᴇᴍ) ───────────
+def selector_text(d):
+    return (f"👤 <b>{d.get('name','User')}</b> (<code>{d['uid']}</code>)\n"
+            f"🏷️ Role: <b>{ROLE_NAME.get(d['role'], d['role'])}</b>\n\n"
+            f"🎨 Toggle Permissions → 💾 Save")
+
+def selector_kb(d):
+    uid = d["uid"]; perms = set(d["perms"])
+    rows = [[btn("🛠 Manager", f"adm|role|{uid}|manager"), btn("⬆️ Uploader", f"adm|role|{uid}|uploader")],
+            [btn("📣 Broadcaster", f"adm|role|{uid}|broadcaster"), btn("📊 Analyst", f"adm|role|{uid}|analyst")],
+            [btn("⚙️ Custom", f"adm|role|{uid}|custom")]]
+    items = list(PERM_LABELS.items())
+    for i in range(0, len(items), 2):
+        rows.append([btn(("☑️ " if p in perms else "❌ ") + lbl, f"adm|t|{uid}|{p}") for p, lbl in items[i:i + 2]])
+    rows.append([btn("💾 Save", f"adm|save|{uid}"), btn("🗑 Remove", f"adm|rem|{uid}")])
+    rows.append([btn("⬅️ Back", "pan|admins")])
+    return InlineKeyboardMarkup(rows)
+
+def msg_target(m):
+    if m.reply_to_message and m.reply_to_message.from_user:
+        tu = m.reply_to_message.from_user
+        return tu.id, tu.first_name or str(tu.id)
+    if len(m.command) > 1 and m.command[1].lstrip("-").isdigit():
+        return int(m.command[1]), (" ".join(m.command[2:]) or m.command[1])
+    return None, None
+
+async def open_selector(c, m, t, name, must_exist=False):
+    exist = await c.store.get("admins", t)
+    if must_exist and not exist:
+        await m.reply("❌ That user is not an admin."); return
+    if exist and exist.get("role") == "owner":
+        await m.reply("👑 Clone owner's permissions cannot be changed."); return
+    d = {"uid": t, "name": hesc(name or (exist or {}).get("name") or str(t)),
+         "perms": list(exist["permissions"]) if exist else [],
+         "role": exist["role"] if exist else "custom", "new": exist is None}
+    set_sess(c, m.from_user.id, "adm_edit", **d)
+    await m.reply(selector_text(d), reply_markup=selector_kb(d), parse_mode=PM_HTML)
+
+async def cmd_giveadmin(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "manage_admins"):
+        await m.reply("❌ <b>NO MANAGE-ADMINS PERMISSION!</b>", parse_mode=PM_HTML); return
+    t, name = msg_target(m)
+    if not t:
+        set_sess(c, uid, "ga_target")
+        await m.reply("👤 Reply to user or send ID:\n<code>/giveadmin 123456789 Name</code>",
+                      parse_mode=PM_HTML)
+        return
+    await open_selector(c, m, t, name)
+
+async def cmd_editadmin(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "manage_admins"):
+        await m.reply("❌ <b>NO MANAGE-ADMINS PERMISSION!</b>", parse_mode=PM_HTML); return
+    t, name = msg_target(m)
+    if not t:
+        set_sess(c, uid, "ea_target")
+        await m.reply("✏️ Reply to admin or send ID:", parse_mode=PM_HTML); return
+    await open_selector(c, m, t, name, must_exist=True)
+
+async def cmd_remadmin(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "manage_admins"):
+        await m.reply("❌ <b>NO MANAGE-ADMINS PERMISSION!</b>", parse_mode=PM_HTML); return
+    t, _ = msg_target(m)
+    if not t:
+        set_sess(c, uid, "ra_target")
+        await m.reply("🗑 Reply to admin or send ID:", parse_mode=PM_HTML); return
+    tgt = await c.store.get("admins", t)
+    if not tgt:
+        await m.reply("❌ Not an admin."); return
+    if tgt.get("role") == "owner":
+        await m.reply("👑 Clone owner cannot be removed!"); return
+    await c.store.delete("admins", t)
+    await log_event(c, "🚫 ᴀᴅᴍɪɴ ʀᴇᴍᴏᴠᴇᴅ", f"Admin: {t}", important=True, uid=t)
+    await m.reply("🗑 <b>Admin removed!</b>", parse_mode=PM_HTML)
+
+async def show_admins_list(c, chat_id, edit_msg=None):
+    docs = c.store.find("admins")
+    order = {"owner": 0, "manager": 1, "uploader": 2, "broadcaster": 3, "analyst": 4, "custom": 5}
+    docs.sort(key=lambda d: order.get(d.get("role"), 9))
+    if not docs:
+        txt, kb = "👥 No admins yet.", admin_panel_kb()
+    else:
+        rows = [[btn(f"{ROLE_NAME.get(d['role'],'⚙️')} {d.get('name','?')[:18]}",
+                     f"adm|view|{d['_id']}") for d in docs[i:i + 2]] for i in range(0, len(docs), 2)]
+        rows.append([btn("⬅️ Back", "pan|refresh")])
+        txt, kb = f"👥 <b>Admins ({len(docs)})</b>\n\nTap to edit permissions:", InlineKeyboardMarkup(rows)
+    if edit_msg is not None:
+        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+        except RPCError: pass
+    else:
+        await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
+
+# ─────────── ꜰᴏʀᴄᴇ-ꜱᴜʙ & ꜱᴇᴛᴛɪɴɢꜱ ───────────
+def fs_panel_kb():
+    return InlineKeyboardMarkup([
+        [btn("🟢 Public Channel", "fs|public"), btn("🔵 Private Request", "fs|private")],
+        [btn("🔴 Disable", "fs|off"), btn("🧾 Log Channel", "fs|logch")]])
+
+async def show_fs_panel(c, chat_id, edit_msg=None):
+    st = cfg(c.store)
+    mode = st.get("fs_mode", "off")
+    mtxt = {"off": "🔴 OFF", "public": "🟢 PUBLIC", "private": "🔵 PRIVATE REQUEST"}.get(mode, mode)
+    ch = f"@{st['fs_username']}" if st.get("fs_username") else (st.get("fs_channel") or "—")
+    txt = (f"🔐 <b>ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ</b>\n━━━━━━━━━━━━━━\n"
+           f"📊 Status: <b>{mtxt}</b>\n📢 Channel: <code>{ch}</code>\n"
+           f"🧾 Log Ch: <code>{st.get('log_channel') or '—'}</code>\n\n"
+           "🟢 Public = Membership Check\n🔵 Private = Join Request Auto-Approve")
+    if edit_msg is not None:
+        try: await edit_msg.edit_text(txt, reply_markup=fs_panel_kb(), parse_mode=PM_HTML)
+        except RPCError: pass
+    else:
+        await c.send_message(chat_id, txt, reply_markup=fs_panel_kb(), parse_mode=PM_HTML)
+
+async def cmd_setfs(c, m):
+    if not await perm_ok(c, m.from_user.id, "forcesub"):
+        await m.reply("❌ <b>NO FORCE-SUB PERMISSION!</b>", parse_mode=PM_HTML); return
+    await show_fs_panel(c, m.chat.id)
+
+async def validate_channel(c, ref):
+    try:
+        chat = await c.get_chat(ref)
+    except RPCError:
+        return None
+    try:
+        mem = await c.get_chat_member(chat.id, "me")
+        if mem.status not in (CMS.OWNER, CMS.ADMINISTRATOR):
+            return None
+    except RPCError:
+        return None
+    return chat
+
+async def fs_got_channel(c, m, mode):
+    ref = (m.text or "").strip()
+    chat = await validate_channel(c, ref)
+    if not chat:
+        await m.reply("❌ <b>CAN'T ACCESS CHANNEL!</b> (Bot must be admin)\nSend again or /cancel", parse_mode=PM_HTML)
+        return
+    store = c.store
+    if mode == "public":
+        if not chat.username:
+            await m.reply("❌ This is a private channel — use 🔵 Private Mode.", parse_mode=PM_HTML); return
+        await set_cfg(store, fs_mode="public", fs_channel=chat.id, fs_username=chat.username)
+        await m.reply(f"✅ <b>Public ForceSub ON!</b>\n\n📢 @{chat.username}", parse_mode=PM_HTML)
+    else:
+        try:
+            link = await c.create_chat_invite_link(chat.id, creates_join_request=True)
+        except RPCError:
+            await m.reply("❌ Invite link creation failed — give bot invite permission.", parse_mode=PM_HTML); return
+        await set_cfg(store, fs_mode="private", fs_channel=chat.id, fs_link=link.invite_link,
+                      fs_username=chat.username or "")
+        await m.reply(f"✅ <b>Private Request ForceSub ON!</b>\n\n🔗 Link Ready — Join requests will auto-approve.", parse_mode=PM_HTML)
+    await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", f"Mode: {mode} | Chat: {chat.id}", important=True)
+    clear_sess(c, m.from_user.id)
+
+async def fs_got_logch(c, m):
+    chat = await validate_channel(c, (m.text or "").strip())
+    if not chat:
+        await m.reply("❌ Bot is not admin / cannot access channel. Send again or /cancel", parse_mode=PM_HTML)
+        return
+    await set_cfg(c.store, log_channel=chat.id)
+    clear_sess(c, m.from_user.id)
+    await m.reply(f"🧾 <b>Log Channel Set!</b>\n\n📥 <code>{chat.id}</code>", parse_mode=PM_HTML)
+    await log_event(c, "🧾 ʟᴏɢ ᴄʜᴀɴɴᴇʟ ꜱᴇᴛ", f"{chat.id}")
+
+# ─────────── ᴇᴅɪᴛ ꜱᴛᴀʀᴛ ───────────
+async def cmd_editstart(c, m):
+    if not await perm_ok(c, m.from_user.id, "editstart"):
+        await m.reply("❌ <b>NO EDIT-START PERMISSION!</b>", parse_mode=PM_HTML); return
+    if len(m.command) > 1 and m.command[1].lower() == "reset":
+        await c.store.put("settings", "start", {"type": "text", "text": DEFAULT_START})
+        await m.reply("♻️ Start message reset to default!"); return
+    set_sess(c, m.from_user.id, "es_media")
+    await m.reply("📝 Reply/Send the new start message:\n\n"
+                  "▸ Text / Photo / Video / Animation / Document\n"
+                  "▸ Vars: {name} {username} {botname}\n"
+                  "▸ Reset: /editstart reset",
+                  parse_mode=PM_HTML, disable_web_page_preview=True)
+
+async def es_got(c, m):
+    uid = m.from_user.id
+    if m.text and not m.media_group_id:
+        await c.store.put("settings", "start", {"type": "text", "text": m.text})
+        kind = "Text"
+    else:
+        mtype, fid, _ = get_media(m)
+        if m.photo:
+            mtype, fid = "photo", m.photo.file_id
+        if not fid:
+            await m.reply("❌ Send text or media!", parse_mode=PM_HTML); return
+        await c.store.put("settings", "start", {"type": mtype, "text": m.caption or "", "file_id": fid})
+        kind = mtype
+    clear_sess(c, uid)
+    await m.reply(f"✅ <b>Start message updated!</b> ({kind})\n\n⚡ Instantly active!", parse_mode=PM_HTML)
+    await log_event(c, "📝 ꜱᴛᴀʀᴛ ᴍꜱɢ ᴇᴅɪᴛᴇᴅ", kind, important=True, uid=uid)
+
+# ─────────── ᴄʟᴏɴᴇ ꜰᴀᴄᴛᴏʀʏ ───────────
+async def cmd_clone(c, m):
+    if not c.is_factory: return
+    uid = m.from_user.id
+    s = get_sess(c, uid)
+    if s and s.get("step") == "clone_token":
+        await m.reply("⏳ Waiting for token — send it or /cancel"); return
+    set_sess(c, uid, "clone_token")
+    await m.reply(CLONE_PROMPT, reply_markup=InlineKeyboardMarkup([[btn("🔴 ᴄᴀɴᴄᴇʟ", "cl|cancel")]]),
+                  parse_mode=PM_HTML, disable_web_page_preview=True)
+
+async def clone_token(c, m):
+    uid = m.from_user.id
+    sess = get_sess(c, uid)
+    if not sess or sess.get("step") != "clone_token": return
+    tok = (m.text or "").strip()
+    if not re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", tok):
+        await m.reply("❌ Invalid token format — send again or /cancel"); return
+    pre = int(tok.split(":", 1)[0])
+    if FACTORY.get_sync("bots", pre) or (FACTORY_CLIENT and pre == FACTORY_CLIENT.bot_id):
+        clear_sess(c, uid)
+        await m.reply("⚠️ <b>This bot is already registered!</b>", parse_mode=PM_HTML); return
+    st = await m.reply("⏳ Validating token & starting bot...")
+    tmp = Client(name=f"cf{now()}", api_id=API_ID, api_hash=API_HASH, bot_token=tok,
+                 in_memory=True, sleep_threshold=15)
+    try:
+        await tmp.start()
+    except (AccessTokenInvalid, AccessTokenExpired):
+        clear_sess(c, uid)
+        await st.edit("❌ Invalid/Revoked token — get a fresh token from @BotFather!"); return
+    except Exception as e:
+        LOG.error("Clone start failed: %s", e)
+        clear_sess(c, uid)
+        await st.edit("⚠️ Failed to start bot — try again in a moment."); return
+    me = await tmp.get_me()
+    if FACTORY_CLIENT and me.id == FACTORY_CLIENT.bot_id:
+        await tmp.stop(); clear_sess(c, uid)
+        await st.edit("⚠️ This is the Factory Bot itself!"); return
+    if FACTORY.get_sync("bots", me.id):
+        await tmp.stop(); clear_sess(c, uid)
+        await st.edit(f"⚠️ @{me.username} is already registered!"); return
+    store = get_store(me.id)
+    await ensure_defaults(store)
+    await set_cfg(store, owner_id=uid)
+    await FACTORY.put("bots", me.id, {"_id": me.id, "username": me.username or str(me.id),
+                                      "name": me.first_name or "Bot", "owner_id": uid,
+                                      "owner_name": m.from_user.first_name or str(uid),
+                                      "token_enc": enc_token(tok), "created_at": now(), "last_active": now()})
+    await store.put("admins", uid, {"_id": str(uid), "name": hesc(m.from_user.first_name or uid),
+                                    "role": "owner", "permissions": list(PERMS), "added_by": 0, "at": now()})
+    attach(tmp, me, store, is_factory=False)
+    register_provider_handlers(tmp, is_factory=False)
+    await apply_commands(tmp)
+    RUNNING[me.id] = tmp
+    clear_sess(c, uid)
+    await st.edit(CLONE_SUCCESS.format(name=hesc(m.from_user.first_name or ""), uname=me.username, bid=me.id),
+                  parse_mode=PM_HTML, disable_web_page_preview=True)
+    await log_event(tmp, "🎉 ᴄʟᴏɴᴇ ᴄʀᴇᴀᴛᴇᴅ", f"Owner: {uid} (@{m.from_user.username})\nBot: @{me.username} ({me.id})",
+                    important=True, uid=uid)
+
+# ─────────── ꜱᴜᴘʀᴇᴍᴇ ───────────
+def build_botlist_text():
+    lines = [f"🤖 <b>ʙᴏᴛ ʟɪꜱᴛ ({FACTORY.count('bots') if FACTORY else 0})</b>", "━━━━━━━━━━━━━━"]
+    for meta in (FACTORY.find("bots") if FACTORY else []):
+        bid = meta["_id"]
+        st = STORES.get(bid)
+        users = st.count("users") if st else 0
+        eps = st.count("episodes") if st else 0
+        running = "🟢" if bid in RUNNING else "🔴"
+        size = human_size(st.size() if st else 0)
+        lines.append(
+            f"\n{running} <b>@{meta['username']}</b> — <code>{bid}</code>\n"
+            f"👤 Owner: {hesc(meta.get('owner_name','?'))} (<code>{meta.get('owner_id')}</code>)\n"
+            f"👥 Users: {users} | 🎬 Eps: {eps} | 🗄️ {size}\n"
+            f"⏰ Last Active: {dt(meta.get('last_active', 0))}\n"
+            f"📅 Created: {dt(meta.get('created_at', 0))}")
+    if len(lines) == 2:
+        lines.append("No clones yet — use /clone to create!")
+    return "\n".join(lines)
+
+def build_db_report():
+    files = sorted(f for f in os.listdir(DB_DIR) if f.endswith(".json")) if os.path.isdir(DB_DIR) else []
+    total_users = total_eps = total_admins = 0
+    seasons = set()
+    colls = set()
+    healthy = 0
+    lines = ["🗄️ <b>ᴅᴀᴛᴀʙᴀꜱᴇ ɪɴꜱɪɢʜᴛꜱ</b>", "━━━━━━━━━━━━━━"]
+    for f in files:
+        path = os.path.join(DB_DIR, f)
+        size = os.path.getsize(path)
+        data = {}
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            healthy += 1
+        except Exception:
+            lines.append(f"🔴 <code>{f}</code> — CORRUPT! ({human_size(size)})")
+            continue
+        u = len(data.get("users", {})); e = len(data.get("episodes", {}))
+        total_users += u; total_eps += e; total_admins += len(data.get("admins", {}))
+        for k in data.get("episodes", {}):
+            seasons.add(k.split(":")[0])
+        colls.update(data.keys())
+        lines.append(f"🟢 <code>{f}</code> — 👥{u} 🎬{e} ({human_size(size)})")
+    lines.append("━━━━━━━━━━━━━━")
+    lines.append(f"🤖 Clones: <b>{FACTORY.count('bots') if FACTORY else 0}</b>")
+    lines.append(f"👥 Users: <b>{total_users}</b> | 🎬 Episodes: <b>{total_eps}</b>")
+    lines.append(f"📚 Seasons: <b>{len(seasons)}</b> | 🛡️ Admins: <b>{total_admins}</b>")
+    lines.append(f"🧾 Collections: <b>{len(colls)}</b>")
+    lines.append(f"🧷 Indexes: Keyed-Docs (O(1) Lookup) ✅")
+    health = f"{(healthy / len(files) * 100):.0f}%" if files else "100%"
+    lines.append(f"💚 DB Health: <b>{health}</b> ({healthy}/{len(files)} files)")
+    lines.append(f"💾 Total: <b>{human_size(sum(os.path.getsize(os.path.join(DB_DIR, f)) for f in files))}</b>")
+    return "\n".join(lines)
+
+async def restart_all(status_msg, only=None):
+    metas = FACTORY.find("bots", lambda d: only is None or d["_id"] == only)
+    okc = fail = 0
+    for meta in metas:
+        bid = meta["_id"]
+        old = RUNNING.get(bid)
+        if old:
+            try: await old.stop()
+            except Exception: pass
+            RUNNING.pop(bid, None)
+        cl = await launch_clone(meta)
+        if cl: okc += 1
+        else: fail += 1
+    try:
+        await status_msg.edit_text(f"♻️ <b>Restart Complete!</b>\n\n✅ {okc} | ❌ {fail}", parse_mode=PM_HTML)
+    except RPCError:
+        pass
+    await dev_log(f"♻️ Bots restarted — ✅{okc} ❌{fail}")
+
+async def cmd_supreme(c, m):
+    if not is_supreme(m.from_user.id): return
+    kb = InlineKeyboardMarkup([
+        [btn("🤖 Bot List", "sv|botlist"), btn("🗄️ Database", "sv|db")],
+        [btn("📊 Global Stats", "sv|stats"), btn("♻️ Restart All", "sv|restart")]])
+    await m.reply(f"👑 <b>ꜱᴜᴘʀᴇᴍᴇ ᴘᴀɴᴇʟ</b>\n━━━━━━━━━━━━━━\n"
+                  f"🤖 Bots: <b>{FACTORY.count('bots') if FACTORY else 0}</b>\n"
+                  f"🟢 Running: <b>{len(RUNNING) - (1 if FACTORY_CLIENT else 0)}</b>\n\n"
+                  f"📣 Global Broadcast: <code>/broadcast all</code>\n"
+                  f"🎯 Single Bot: <code>/broadcast 123456</code>",
+                  reply_markup=kb, parse_mode=PM_HTML)
+
+async def cmd_botlist(c, m):
+    if not is_supreme(m.from_user.id): return
+    for part in chunk(build_botlist_text()):
+        try: await m.reply(part, parse_mode=PM_HTML, disable_web_page_preview=True)
+        except RPCError: pass
+        await asyncio.sleep(0.3)
+
+async def cmd_db(c, m):
+    if not is_supreme(m.from_user.id): return
+    await m.reply(build_db_report(), parse_mode=PM_HTML, disable_web_page_preview=True)
+
+async def cmd_restart(c, m):
+    if not is_supreme(m.from_user.id): return
+    only = None
+    if len(m.command) > 1 and m.command[1].isdigit():
+        only = int(m.command[1])
+    status = await m.reply("♻️ Gracefully restarting clones...")
+    await restart_all(status, only)
+
+# ═════════════════════ ᴄᴀʟʟʙᴀᴄᴋ ʜᴀɴᴅʟᴇʀꜱ ═════════════════════
+async def cb_upload(c, q, parts):
+    uid = q.from_user.id
+    act = parts[1]
+    if act == "ep":
+        if not await perm_ok(c, uid, "upload"):
+            await q_safe(q, "❌ NO UPLOAD PERM!"); return
+        s = get_sess(c, uid) or {"step": "up_video", "data": {"added": 0}}
+        s["step"] = "up_video"; SESSIONS[(c.bot_id, uid)] = s
+        await q_safe(q, "📤 Send Video")
+        try: await q.message.edit_text("📤 <b>Send video file now</b> (caption optional):\n\n❌ /cancel", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "ns":
+        if not (await perm_ok(c, uid, "seasons") or await perm_ok(c, uid, "upload")):
+            await q_safe(q, "❌ NO SEASONS PERM!"); return
+        set_sess(c, uid, "ns_season")
+        await q_safe(q, "🆕 Season Number?")
+        try: await q.message.edit_text("🆕 <b>Send Season Number</b> (ex: 2):", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "done":
+        s = get_sess(c, uid)
+        n = s["data"].get("added", 0) if s else 0
+        clear_sess(c, uid)
+        await q_safe(q, f"🏁 Done — {n} eps!")
+        try: await q.message.edit_text(f"🏁 <b>Upload Finished!</b>\n\n✅ {n} episodes added", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "cancel":
+        clear_sess(c, uid)
+        await q_safe(q, "❌ Cancelled")
+        try: await q.message.edit_text("❌ <b>Upload cancelled.</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+
+async def cb_edit(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "edit"):
+        await q_safe(q, "❌ NO EDIT PERM!"); return
+    act, ref = parts[1], parts[2]
+    s, e = map(int, ref.split(":"))
+    ep = await c.store.get("episodes", ep_id(s, e))
+    if not ep:
+        await q_safe(q, "❌ NOT FOUND!"); return
+    if act == "video":
+        set_sess(c, uid, "ed_video", s=s, e=e)
+        await q_safe(q, "🎬 Send New Video")
+        try: await q.message.edit_text(f"🎬 <b>S{s} E{e} — Send new video:</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "cap":
+        if not await perm_ok(c, uid, "captions"):
+            await q_safe(q, "❌ NO CAPTIONS PERM!"); return
+        set_sess(c, uid, "ed_cap", s=s, e=e)
+        await q_safe(q, "✏️ Send New Caption")
+        try: await q.message.edit_text(f"✏️ <b>S{s} E{e} — Send new caption text:</b>\n\nVars: {{season}} {{episode}} {{botname}}", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "thumb":
+        if not await perm_ok(c, uid, "thumb"):
+            await q_safe(q, "❌ NO THUMB PERM!"); return
+        set_sess(c, uid, "ed_thumb", s=s, e=e)
+        await q_safe(q, "🖼️ Send Thumb Photo")
+        try: await q.message.edit_text(f"🖼️ <b>S{s} E{e} — Send thumbnail photo:</b>\n\n(or send 'remove' to clear)", parse_mode=PM_HTML)
+        except RPCError: pass
+
+async def ed_apply(c, m, kind):
+    uid = m.from_user.id
+    s = get_sess(c, uid); d = s["data"]; sn, en = d["s"], d["e"]
+    ep = await c.store.get("episodes", ep_id(sn, en))
+    if not ep:
+        clear_sess(c, uid); await m.reply("❌ Not found!"); return
+    if kind == "video":
+        mtype, fid, tid = get_media(m)
+        if not fid:
+            await m.reply("🎬 <b>Send video file!</b>", parse_mode=PM_HTML); return
+        upd = {"file_id": fid, "type": mtype, "updated_at": now()}
+        if tid: upd["thumb_id"] = tid; upd["thumb_path"] = None
+        await c.store.update("episodes", ep_id(sn, en), **upd)
+        await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"S{sn} E{en} — Video Replaced", important=True, uid=uid)
+    elif kind == "cap":
+        await c.store.update("episodes", ep_id(sn, en), caption=m.text or "", updated_at=now())
+        await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"S{sn} E{en} — Caption Updated", important=True, uid=uid)
+    elif kind == "thumb":
+        if (m.text or "").strip().lower() == "remove":
+            await c.store.update("episodes", ep_id(sn, en), thumb_id=None, thumb_path=None, updated_at=now())
+        else:
+            tid = m.photo.file_id if m.photo else (m.video.thumbs[0].file_id if m.video and m.video.thumbs else None)
+            if not tid:
+                await m.reply("🖼️ Send photo!", parse_mode=PM_HTML); return
+            path = os.path.join(THUMB_DIR, f"{c.bot_id}_{sn}_{en}.jpg")
+            try: await c.download_media(tid, file_name=path)
+            except RPCError: path = None
+            await c.store.update("episodes", ep_id(sn, en), thumb_id=tid, thumb_path=path, updated_at=now())
+        await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"S{sn} E{en} — Thumb Updated", important=True, uid=uid)
+    clear_sess(c, uid)
+    await m.reply(f"✅ <b>Updated — S{sn} E{en}</b>\n\n⚡ Instantly effective!",
+                  parse_mode=PM_HTML)
+    await show_editor(c, m.chat.id, sn, en)
+
+async def cb_panel(c, q, parts):
+    uid = q.from_user.id
+    act = parts[1]
+    checks = {"upload": "upload", "edit": "edit", "del": "delete", "bc": "broadcast",
+              "stats": "stats", "list": "list", "fs": "forcesub", "es": "editstart"}
+    if act in checks and not await perm_ok(c, uid, checks[act]):
+        await q_safe(q, f"❌ NO {checks[act].upper()} PERM!"); return
+    if act == "upload":
+        await q_safe(q, "⬆️"); set_sess(c, uid, "up_menu")
+        await show_upload_menu(c, None, edit_msg=q.message)
+    elif act == "edit":
+        await q_safe(q, "✏️"); set_sess(c, uid, "ed_ref")
+        try: await q.message.edit_text("✏️ <b>Send episode reference:</b>\n▸ S1 E4", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "del":
+        await q_safe(q, "🗑"); set_sess(c, uid, "del_ref")
+        try: await q.message.edit_text("🗑️ <b>Send reference to delete:</b>\n▸ Season 1 Episode 4", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "bc":
+        await q_safe(q, "📣")
+        try: await q.message.edit_text("📣 <b>Broadcast:</b> Reply to any message with /broadcast", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "stats":
+        await q_safe(q, "📊")
+        await c.send_message(uid, build_bot_stats(c), parse_mode=PM_HTML)
+    elif act == "list":
+        await q_safe(q, "📋")
+        await send_list_to(c, uid)
+    elif act == "fs":
+        await q_safe(q, "🔐"); await show_fs_panel(c, None, edit_msg=q.message)
+    elif act == "es":
+        await q_safe(q, "📝"); set_sess(c, uid, "es_media")
+        try: await q.message.edit_text("📝 <b>Send new start message</b> (text/photo/video)...", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "admins":
+        await q_safe(q, "👥"); await show_admins_list(c, None, edit_msg=q.message)
+    elif act == "refresh":
+        await q_safe(q, "🔄")
+        doc = await c.store.get("admins", uid)
+        role = ROLE_NAME.get(doc["role"], doc["role"]) if doc else "👑 Supreme"
+        try: await q.message.edit_text(ADMIN_PANEL_TXT.format(uname=c.username, role=role),
+                                       reply_markup=admin_panel_kb(), parse_mode=PM_HTML)
+        except RPCError: pass
+
+async def send_list_to(c, chat_id):
+    seasons = {}
+    for k, v in c.store.c("episodes").items():
+        seasons.setdefault(v["season"], []).append(v["episode"])
+    if not seasons:
+        await c.send_message(chat_id, "📭 No episodes yet."); return
+    text = "📺 <b>ᴇᴘɪꜱᴏᴅᴇ ʟɪꜱᴛ</b>\n━━━━━━━━━━━━━━\n"
+    for s in sorted(seasons):
+        text += f"\n🟣 <b>Season {s}</b>\n"
+        for e in sorted(seasons[s]):
+            text += f"   ▸ Episode {e}\n"
+    for part in chunk(text):
+        try: await c.send_message(chat_id, part, parse_mode=PM_HTML, disable_web_page_preview=True)
+        except RPCError: pass
+        await asyncio.sleep(0.3)
+
+async def cb_fs(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "forcesub"):
+        await q_safe(q, "❌ NO FS PERM!"); return
+    act = parts[1]
+    if act == "off":
+        await set_cfg(c.store, fs_mode="off")
+        await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", "OFF", important=True)
+        await q_safe(q, "🔴 ForceSub OFF!")
+        await show_fs_panel(c, None, edit_msg=q.message)
+    elif act in ("public", "private", "logch"):
+        step = {"public": "fs_public", "private": "fs_private", "logch": "fs_logch"}[act]
+        set_sess(c, uid, step)
+        prompts = {"public": "🟢 <b>Send Public Channel @username or ID:</b>\n(Bot must be admin)",
+                   "private": "🔵 <b>Send Private Channel @username or ID:</b>\n(Bot must be admin + invite perm)",
+                   "logch": "🧾 <b>Send Log Channel @username or ID:</b>"}
+        await q_safe(q, act)
+        try: await q.message.edit_text(prompts[act], parse_mode=PM_HTML)
+        except RPCError: pass
+
+async def cb_adm(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "manage_admins"):
+        await q_safe(q, "❌ NO MANAGE-ADMINS PERM!"); return
+    action = parts[1]; tuid = int(parts[2])
+    tgt = await c.store.get("admins", tuid)
+    if tgt and tgt.get("role") == "owner" and action in ("t", "role", "rem"):
+        await q_safe(q, "👑 Clone owner protected!", True); return
+    sess = get_sess(c, uid)
+    if sess and sess.get("step") == "adm_edit" and sess["data"].get("uid") == tuid:
+        d = sess["data"]
+    else:
+        d = {"uid": tuid, "name": (tgt or {}).get("name", "User"),
+             "perms": list((tgt or {}).get("permissions", [])),
+             "role": (tgt or {}).get("role", "custom"), "new": tgt is None}
+    if action == "t":
+        perm = parts[3]
+        if perm in d["perms"]: d["perms"].remove(perm)
+        else: d["perms"].append(perm)
+        SESSIONS[(c.bot_id, uid)] = {"step": "adm_edit", "data": d}
+        await q_safe(q, "✅ Toggled — press Save!")
+        try: await q.message.edit_text(selector_text(d), reply_markup=selector_kb(d), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif action == "role":
+        role = parts[3]
+        d["role"] = role; d["perms"] = list(ROLE_PRESETS.get(role, []))
+        SESSIONS[(c.bot_id, uid)] = {"step": "adm_edit", "data": d}
+        await q_safe(q, f"🎨 {ROLE_NAME.get(role, role)} Preset!")
+        try: await q.message.edit_text(selector_text(d), reply_markup=selector_kb(d), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif action == "save":
+        was_new = tgt is None
+        await c.store.put("admins", tuid, {"_id": str(tuid), "name": d.get("name", "User"), "role": d["role"],
+                                           "permissions": d["perms"], "added_by": uid, "at": now()})
+        await apply_admin_commands(c, tuid)
+        SESSIONS.pop((c.bot_id, uid), None)
+        await q_safe(q, "💾 Saved! DB updated ✅")
+        await log_event(c, "🛡️ ᴀᴅᴍɪɴ ᴀᴅᴅᴇᴅ" if was_new else "🔐 ᴘᴇʀᴍɪꜱꜱɪᴏɴ ᴇᴅɪᴛᴇᴅ",
+                        f"Admin: {tuid} | Role: {d['role']} | Perms: {','.join(d['perms']) or '—'}",
+                        important=True, uid=tuid)
+        d["new"] = False
+        try: await q.message.edit_text(selector_text(d), reply_markup=selector_kb(d), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif action == "rem":
+        await c.store.delete("admins", tuid)
+        SESSIONS.pop((c.bot_id, uid), None)
+        await q_safe(q, "🗑 Removed!")
+        await log_event(c, "🚫 ᴀᴅᴍɪɴ ʀᴇᴍᴏᴠᴇᴅ", f"Admin: {tuid}", important=True, uid=tuid)
+        try: await q.message.edit_text("🗑 <b>Admin removed.</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif action == "view":
+        if not tgt:
+            await q_safe(q, "❌ Not an admin!"); return
+        SESSIONS[(c.bot_id, uid)] = {"step": "adm_edit", "data": d}
+        await q_safe(q, "👁")
+        try: await q.message.edit_text(selector_text(d), reply_markup=selector_kb(d), parse_mode=PM_HTML)
+        except RPCError: pass
+
+async def cb_supreme(c, q, parts):
+    if not is_supreme(q.from_user.id):
+        await q_safe(q, "❌ Supreme Only!"); return
+    act = parts[1]
+    if act == "botlist":
+        await q_safe(q, "🤖")
+        for part in chunk(build_botlist_text()):
+            try: await q.message.reply(part, parse_mode=PM_HTML, disable_web_page_preview=True)
+            except RPCError: pass
+    elif act == "db":
+        await q_safe(q, "🗄️")
+        try: await q.message.reply(build_db_report(), parse_mode=PM_HTML, disable_web_page_preview=True)
+        except RPCError: pass
+    elif act == "stats":
+        await q_safe(q, "📊")
+        try: await q.message.reply(build_global_stats(), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "restart":
+        await q_safe(q, "♻️ Restarting...")
+        await restart_all(q.message)
+
+# ─────────── ᴍᴀꜱᴛᴇʀ ᴄᴀʟʟʙᴀᴄᴋ ───────────
+async def h_callback(c, q):
+    try:
+        if not q.from_user:
+            try: await q.answer()
+            except RPCError: pass
+            return
+        uid = q.from_user.id
+        data = q.data or ""
+        if data == "ckfs":
+            ok, kb = await fs_state(c, uid)
+            if ok:
+                await q_safe(q, "✅ Verified!")
+                user = await c.store.get("users", uid) or await ensure_user(c, q.from_user)
+                await convert_referral(c, uid)
+                try: await q.message.delete()
+                except RPCError: pass
+                await send_start_content(c, uid, user)
+            else:
+                await unauthorized(c, uid)
+                await q_safe(q, "❌ Still not verified — join channel first!")
+        elif data.startswith("ep|"):
+            await q_safe(q, "▶️ Loading Episode...")
+            s, e = map(int, data.split("|")[1].split(":"))
+            user = await c.store.get("users", uid)
+            await send_episode(c, uid, s, e, user)
+        elif data.startswith("next|"):
+            await q_safe(q, "▶️ Loading Next...")
+            s, e = map(int, data.split("|")[1].split(":"))
+            user = await c.store.get("users", uid)
+            found = await send_episode(c, uid, s, e + 1, user)
+            if not found:
+                if await c.store.get("episodes", ep_id(s + 1, 1)):
+                    try: await c.send_message(uid, f"🎉 <b>Season {s} Finished!</b>\n\n▶️ Starting Season {s + 1}...", parse_mode=PM_HTML)
+                    except RPCError: pass
+                    await send_episode(c, uid, s + 1, 1, user)
+                else:
+                    try: await c.send_message(uid, COMING_SOON, parse_mode=PM_HTML)
+                    except RPCError: pass
+        elif data.startswith("sea|"):
+            await q_safe(q, "📚")
+            sn = int(data.split("|")[1])
+            eps = sorted(int(k.split(":")[1]) for k in c.store.c("episodes") if k.startswith(f"{sn}:"))
+            if eps:
+                txt = (f"📚 <b>ꜱᴇᴀꜱᴏɴ {sn}</b>\n\n" + "  ".join(f"ᴇ{x}" for x in eps) +
+                       f"\n\n▶️ Send query: <code>S{sn} E{eps[0]}</code>")
+                try: await q.message.reply(txt, parse_mode=PM_HTML)
+                except RPCError: pass
+        elif data == "fmt":
+            await q_safe(q, "🔍")
+            try: await q.message.reply(INVALID_FMT, parse_mode=PM_HTML)
+            except RPCError: pass
+        elif data == "rf|menu":
+            await q_safe(q, "🎁"); await send_refer(c, uid, uid)
+        elif data == "rf|link":
+            link = f"https://t.me/{c.username}?start=ref_{uid}"
+            await q_safe(q, "🔗 Link sent!")
+            try: await c.send_message(uid, f"🔗 <code>{link}</code>", parse_mode=PM_HTML, disable_web_page_preview=True)
+            except RPCError: pass
+        elif data == "rf|stats":
+            await q_safe(q, "🏆")
+            try: await q.message.reply(ranking_text(c.store), parse_mode=PM_HTML)
+            except RPCError: pass
+        elif data == "cloneme":
+            if not c.is_factory: return
+            set_sess(c, uid, "clone_token")
+            await q_safe(q, "🤖 Send Bot Token")
+            try: await q.message.reply(CLONE_PROMPT, parse_mode=PM_HTML, disable_web_page_preview=True,
+                                       reply_markup=InlineKeyboardMarkup([[btn("🔴 ᴄᴀɴᴄᴇʟ", "cl|cancel")]]))
+            except RPCError: pass
+        elif data == "cl|cancel":
+            clear_sess(c, uid)
+            await q_safe(q, "❌ Cancelled")
+            try: await q.message.edit_text("❌ <b>Clone creation cancelled.</b>", parse_mode=PM_HTML)
+            except RPCError: pass
+        elif data.startswith("up|"):
+            await cb_upload(c, q, data.split("|"))
+        elif data.startswith("ed|"):
+            await cb_edit(c, q, data.split("|"))
+        elif data.startswith("pan|"):
+            await cb_panel(c, q, data.split("|"))
+        elif data.startswith("fs|"):
+            await cb_fs(c, q, data.split("|"))
+        elif data.startswith("adm|"):
+            await cb_adm(c, q, data.split("|"))
+        elif data.startswith("sv|"):
+            await cb_supreme(c, q, data.split("|"))
+        else:
+            try: await q.answer()
+            except RPCError: pass
+    except FloodWait as f:
+        await asyncio.sleep(f.value)
+    except Exception as e:
+        LOG.exception("Callback error")
+        await dev_log(f"⚠️ Callback error @{c.username}: {e!r}")
+
+# ═════════════════════ ɢᴇɴᴇʀɪᴄ ᴍꜱɢ (ꜱᴇꜱꜱɪᴏɴꜱ + ᴇᴘɪꜱᴏᴅᴇꜱ) ═════════════════════
+async def route_session(c, m, s):
+    uid = m.from_user.id
+    step = s.get("step")
+    if step == "clone_token":
+        await clone_token(c, m)
+    elif step == "up_video":
+        await up_got_video(c, m)
+    elif step == "up_ref" and m.text:
+        await up_got_ref(c, m)
+    elif step == "ns_season" and m.text:
+        await ns_got_season(c, m)
+    elif step == "ns_video":
+        await ns_got_video(c, m)
+    elif step == "ed_ref" and m.text:
+        await ed_got_ref(c, m)
+    elif step == "ed_video":
+        await ed_apply(c, m, "video")
+    elif step == "ed_cap" and m.text:
+        await ed_apply(c, m, "cap")
+    elif step == "ed_thumb":
+        await ed_apply(c, m, "thumb")
+    elif step == "del_ref" and m.text:
+        pe = parse_episode(m.text)
+        if not pe:
+            await m.reply(INVALID_FMT, parse_mode=PM_HTML); return
+        clear_sess(c, uid)
+        await do_delete(c, m.chat.id, *pe)
+    elif step == "es_media":
+        await es_got(c, m)
+    elif step == "fs_public" and m.text:
+        await fs_got_channel(c, m, "public")
+    elif step == "fs_private" and m.text:
+        await fs_got_channel(c, m, "private")
+    elif step == "fs_logch" and m.text:
+        await fs_got_logch(c, m)
+    elif step == "ga_target" and m.text:
+        t, name = msg_target(m)
+        if not t and (m.text or "").strip().isdigit():
+            t = int(m.text.strip()); name = str(t)
+        if not t:
+            await m.reply("👤 Send User ID or reply:"); return
+        clear_sess(c, uid)
+        await open_selector(c, m, t, name)
+    elif step == "ea_target" and m.text:
+        t, name = msg_target(m)
+        if not t and (m.text or "").strip().isdigit():
+            t = int(m.text.strip()); name = str(t)
+        if not t:
+            await m.reply("❌ Send User ID:"); return
+        clear_sess(c, uid)
+        await open_selector(c, m, t, name, must_exist=True)
+    elif step == "ra_target" and m.text:
+        t, _ = msg_target(m)
+        if not t and (m.text or "").strip().isdigit():
+            t = int(m.text.strip())
+        if not t:
+            await m.reply("❌ Send User ID:"); return
+        clear_sess(c, uid)
+        tgt = await c.store.get("admins", t)
+        if not tgt: await m.reply("❌ Not an admin."); return
+        if tgt.get("role") == "owner": await m.reply("👑 Clone owner cannot be removed!"); return
+        await c.store.delete("admins", t)
+        await log_event(c, "🚫 ᴀᴅᴍɪɴ ʀᴇᴍᴏᴠᴇᴅ", f"Admin: {t}", important=True, uid=t)
+        await m.reply("🗑 <b>Admin removed!</b>", parse_mode=PM_HTML)
+
+async def h_generic(c, m):
+    try:
+        if not m.from_user: return
+        uid = m.from_user.id
+        s = get_sess(c, uid)
+        if s:
+            await route_session(c, m, s); return
+        if m.text and not m.text.startswith("/"):
+            await episode_request(c, m)
+    except FloodWait as f:
+        await asyncio.sleep(f.value)
+    except Exception as e:
+        LOG.exception("Generic error")
+        await dev_log(f"⚠️ Error @{c.username}: {e!r}")
+
+# ═════════════════════ ᴄᴏᴍᴍᴀɴᴅ ᴅɪꜱᴘᴀᴛᴄʜᴇʀ ═════════════════════
+CMD_MAP = {
+    "upload": cmd_upload, "edit": cmd_edit, "delete": cmd_delete, "broadcast": cmd_broadcast,
+    "stats": cmd_stats, "list": cmd_list, "admin": cmd_admin, "setfs": cmd_setfs,
+    "editstart": cmd_editstart, "giveadmin": cmd_giveadmin, "editadmin": cmd_editadmin,
+    "remadmin": cmd_remadmin, "done": cmd_done, "cancel": cmd_cancel,
+    "clone": cmd_clone, "supreme": cmd_supreme, "botlist": cmd_botlist,
+    "db": cmd_db, "restart": cmd_restart,
+}
+
+async def h_admin_cmds(c, m):
+    try:
+        name = m.command[0].lstrip("/").lower()
+        if name in FACTORY_ONLY and not c.is_factory:
+            return
+        fn = CMD_MAP.get(name)
+        if fn:
+            await fn(c, m)
+    except FloodWait as f:
+        await asyncio.sleep(f.value)
+    except Exception as e:
+        LOG.exception("Command error %s", name if 'name' in dir() else '?')
+        await dev_log(f"⚠️ Command error @{c.username}: {e!r}")
+        try: await m.reply("⚠️ Error — try again.")
+        except RPCError: pass
+
+async def h_join_request(c, update, users, chats):
+    try:
+        req = getattr(update, "bot_chat_join_request", None)
+        if not req: return
+        st = cfg(c.store)
+        if st.get("fs_mode") != "private" or req.chat_id != st.get("fs_channel"):
+            return
+        uid = req.user_id
+        u = await c.store.get("users", uid)
+        if not u:
+            u = {"_id": str(uid), "first_name": "User", "username": "", "started_at": now(),
+                 "last_seen": now(), "fs_verified": True}
+            await c.store.put("users", uid, u)
+        await c.store.update("users", uid, fs_verified=True, fs_request=True)
+        ap = getattr(c, "approve_chat_join_request", None)
+        if ap:
+            try: await ap(req.chat_id, uid)
+            except RPCError: pass
+        await convert_referral(c, uid)
+        await log_event(c, "✅ ꜰꜱ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ", f"User: {uid}", uid=uid)
+        try:
+            await c.send_message(uid, "✅ <b>ᴀᴄᴄᴇꜱꜱ ᴀᴘᴘʀᴏᴠᴇᴅ!</b>\n\n▶️ Now send: S1 E1 or Anime Keyword", parse_mode=PM_HTML)
+        except RPCError:
+            pass
+    except Exception as e:
+        LOG.exception("Join request error")
+        await dev_log(f"⚠️ Join request error: {e!r}")
+
+# ═════════════════════ ʀᴇɢɪꜱᴛʀᴀᴛɪᴏɴ ═════════════════════
+F_START = filters.command("start") & filters.private & filters.incoming
+F_REFER = filters.command("refer") & filters.private & filters.incoming
+F_CMD = filters.command(ALL_CMDS) & filters.private & filters.incoming
+F_GEN = filters.private & filters.incoming & ~filters.command(ALL_CMDS) & ~filters.service
+
+def register_provider_handlers(c, is_factory):
+    c.add_handler(MessageHandler(cmd_start, F_START), 0)
+    c.add_handler(MessageHandler(cmd_refer, F_REFER), 0)
+    c.add_handler(MessageHandler(h_admin_cmds, F_CMD), 0)
+    c.add_handler(CallbackQueryHandler(h_callback), 0)
+    c.add_handler(MessageHandler(h_generic, F_GEN), 1)
+    c.add_handler(RawUpdateHandler(h_join_request), -1)
+
+def attach(c, me, store, is_factory):
+    c.bot_id = me.id
+    c.username = me.username or f"bot{me.id}"
+    c.is_factory = is_factory
+    c.store = store
+
+async def launch_clone(meta):
+    bid = meta["_id"]
+    try:
+        token = dec_token(meta["token_enc"])
+    except Exception as e:
+        LOG.error("Token decrypt failed %s: %s", bid, e)
+        return None
+    c = Client(name=f"clone_{bid}", api_id=API_ID, api_hash=API_HASH, bot_token=token,
+               in_memory=True, sleep_threshold=15)
+    try:
+        await c.start()
+    except (AccessTokenInvalid, AccessTokenExpired):
+        LOG.error("Clone %s token invalid", bid)
+        return None
+    except Exception as e:
+        LOG.error("Clone %s start failed: %s", bid, e)
+        return None
+    me = await c.get_me()
+    store = get_store(bid)
+    await ensure_defaults(store)
+    attach(c, me, store, is_factory=False)
+    register_provider_handlers(c, is_factory=False)
+    await apply_commands(c)
+    RUNNING[bid] = c
+    if FACTORY:
+        await FACTORY.update("bots", bid, last_active=now(), username=me.username or meta.get("username", str(bid)))
+    LOG.info("🟢 Clone Live: @%s (%s)", me.username, bid)
+    return c
+
+# ═════════════════════ ᴀᴜᴛᴏ-ᴄʟᴇᴀɴᴜᴘ ═════════════════════
+async def run_cleanup():
+    t = now()
+    for meta in list(FACTORY.find("bots")):
+        bid = meta["_id"]
+        st = STORES.get(bid)
+        if st is None:
+            if not os.path.exists(clone_path(bid)): continue
+            st = Store(clone_path(bid)); STORES[bid] = st
+        users = st.count("users"); eps = st.count("episodes")
+        inactive_days = (t - meta.get("last_active", meta.get("created_at", t))) / 86400
+        if eps == 0 and users < CLONE_MIN_USERS and inactive_days >= CLONE_INACTIVE_DAYS:
+            LOG.info("🗑 Cleanup: @%s (%s)", meta.get("username"), bid)
+            old = RUNNING.pop(bid, None)
+            if old:
+                try: await old.stop()
+                except Exception: pass
+            STORES.pop(bid, None)
+            try: os.remove(st.path)
+            except OSError: pass
+            await FACTORY.delete("bots", bid)
+            await dev_log(f"🗑️ ᴄʟᴏɴᴇ ᴀᴜᴛᴏ-ᴅᴇʟᴇᴛᴇᴅ: @{meta.get('username')} ({bid})\n"
+                          f"Users: {users} | Eps: 0 | Inactive: {inactive_days:.1f}d")
+
+async def cleanup_loop():
+    while True:
+        await asyncio.sleep(CLEANUP_INTERVAL)
+        try:
+            await run_cleanup()
+            for st in STORES.values():
+                if st._dirty: await st.flush()
+        except Exception as e:
+            LOG.exception("Cleanup error")
+            await dev_log(f"⚠️ Cleanup error: {e!r}")
+
+# ═════════════════════ ᴍᴀɪɴ ═════════════════════
+async def main():
+    global FACTORY, FACTORY_CLIENT
+    os.makedirs(DB_DIR, exist_ok=True)
+    os.makedirs(THUMB_DIR, exist_ok=True)
+
+    if not (API_ID and API_HASH and BOT_TOKEN):
+        print("❌ Config incomplete! Fill API_ID / API_HASH / BOT_TOKEN at top of app.py or in environment.")
+        return
+
+    FACTORY = Store(os.path.join(DB_DIR, "factory.json"))
+    for col in _COLLECTIONS + ["bots", "developer_logs"]:
+        FACTORY.c(col)
+    await ensure_defaults(FACTORY)
+    if SUPREMES:
+        await set_cfg(FACTORY, owner_id=SUPREMES[0])
+    LOG.info("🗄️ Factory DB Ready — %s", FACTORY.path)
+
+    fc = Client("factory", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN,
+                in_memory=True, sleep_threshold=15)
+    await fc.start()
+    me = await fc.get_me()
+    attach(fc, me, FACTORY, is_factory=True)
+    FACTORY_CLIENT = fc
+    RUNNING[me.id] = fc
+    register_provider_handlers(fc, is_factory=True)
+    await apply_commands(fc)
+    LOG.info("🟢 Factory Live: @%s (%s)", me.username, me.id)
+    await dev_log(f"🚀 Factory Started: @{me.username} ({me.id})\n🤖 Restoring clones...")
+
+    okc = fail = 0
+    for meta in list(FACTORY.find("bots")):
+        cl = await launch_clone(meta)
+        if cl: okc += 1
+        else: fail += 1
+    LOG.info("♻️ Restored Clones — ✅%d ❌%d", okc, fail)
+
+    asyncio.create_task(cleanup_loop())
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try: loop.add_signal_handler(sig, stop.set)
+        except (NotImplementedError, RuntimeError): pass
+
+    print(f"\n{'═'*55}\n  🏭 {FACTORY_NAME} IS LIVE — @{me.username}\n  🤖 Clones: {len(FACTORY.c('bots'))} | DB: JSON ({DB_DIR}/)\n{'═'*55}\n")
+    await stop.wait()
+
+    LOG.info("🛑 Shutting down...")
+    await dev_log("🛑 Factory stopped gracefully.")
+    for c in list(RUNNING.values()):
+        try: await c.stop()
+        except Exception: pass
+    for st in STORES.values():
+        await st.flush()
+    await FACTORY.flush()
+    LOG.info("✅ Bye!")
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
