@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from pyrogram import Client, filters, enums
 from pyrogram.types import (Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                            BotCommand, BotCommandScopeDefault, BotCommandScopeChat)
+                            BotCommand, BotCommandScopeDefault, BotCommandScopeChat, LinkPreviewOptions)
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler, RawUpdateHandler
 from pyrogram.errors import (FloodWait, RPCError, UserNotParticipant, AccessTokenInvalid,
                              AccessTokenExpired, UserIsBlocked, InputUserDeactivated,
@@ -59,6 +59,7 @@ LOG = logging.getLogger("ꜰᴀᴄᴛᴏʀʏ")
 PM_HTML = enums.ParseMode.HTML
 PM_OFF = enums.ParseMode.DISABLED
 CMS = enums.ChatMemberStatus
+LPO_DISABLE = LinkPreviewOptions(is_disabled=True)
 
 START_TS = None
 def now(): return int(time.time())
@@ -465,7 +466,7 @@ async def dev_log(text):
     if LOG_CHANNEL_ID and FACTORY_CLIENT is not None:
         try:
             await FACTORY_CLIENT.send_message(LOG_CHANNEL_ID, text, parse_mode=PM_OFF,
-                                              disable_web_page_preview=True)
+                                              link_preview_options=LPO_DISABLE)
         except RPCError:
             pass
 
@@ -475,7 +476,7 @@ async def log_event(c, event, detail="", important=False, uid=None):
     text = f"{event}\n{detail}\n🤖 @{c.username} | {dt(now())}"
     lc = cfg(c.store).get("log_channel", 0)
     if lc:
-        try: await c.send_message(lc, text, parse_mode=PM_OFF, disable_web_page_preview=True)
+        try: await c.send_message(lc, text, parse_mode=PM_OFF, link_preview_options=LPO_DISABLE)
         except RPCError: pass
     if important:
         await dev_log(text)
@@ -603,12 +604,12 @@ async def send_start_content(c, chat_id, user):
             await c.send_document(chat_id, s["file_id"], caption=text, parse_mode=PM_HTML, reply_markup=kb)
         else:
             await c.send_message(chat_id, text, parse_mode=PM_HTML, reply_markup=kb,
-                                 disable_web_page_preview=True)
+                                 link_preview_options=LPO_DISABLE)
     except RPCError as e:
         LOG.warning("Start content fallback: %s", e)
         try:
             await c.send_message(chat_id, text, parse_mode=PM_HTML, reply_markup=kb,
-                                 disable_web_page_preview=True)
+                                 link_preview_options=LPO_DISABLE)
         except RPCError:
             pass
 
@@ -759,7 +760,7 @@ async def cmd_start(c, m):
         await unauthorized(c, uid)
         try:
             await m.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b>\n\nJoin the channel then press ✅ ᴠᴇʀɪꜰʏ.",
-                          reply_markup=kb, parse_mode=PM_HTML, disable_web_page_preview=True)
+                          reply_markup=kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError:
             pass
         return
@@ -774,7 +775,7 @@ async def episode_request(c, m):
         await unauthorized(c, uid)
         try:
             await m.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b> Join the channel first.",
-                          reply_markup=kb, parse_mode=PM_HTML, disable_web_page_preview=True)
+                          reply_markup=kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError:
             pass
         return
@@ -847,7 +848,7 @@ async def send_refer(c, chat_id, uid):
     kb = InlineKeyboardMarkup([
         [ubtn("🟢 ꜱʜᴀʀᴇ ʙᴏᴛ", f"https://t.me/share/url?url={quote(link)}&text={quote('🎬 Watch Anime Free!')}")],
         [btn("🔵 ᴄᴏᴘʏ ʟɪɴᴋ", "rf|link"), btn("🟣 ʀᴇꜰᴇʀʀᴀʟ ꜱᴛᴀᴛꜱ", "rf|stats")]])
-    await c.send_message(chat_id, txt, parse_mode=PM_HTML, disable_web_page_preview=True, reply_markup=kb)
+    await c.send_message(chat_id, txt, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE, reply_markup=kb)
 
 async def cmd_refer(c, m):
     await ensure_user(c, m.from_user)
@@ -1066,7 +1067,7 @@ async def do_delete(c, chat_id, aid, s, e):
 async def copy_any(c, chat_id, m):
     if m.text:
         return await c.send_message(chat_id, m.text, entities=m.entities, parse_mode=PM_OFF,
-                                    disable_web_page_preview=True)
+                                    link_preview_options=LPO_DISABLE)
     cap = m.caption; cape = m.caption.entities if m.caption else None
     if m.photo:
         return await c.send_photo(chat_id, m.photo.file_id, caption=cap, caption_entities=cape, parse_mode=PM_OFF)
@@ -1237,7 +1238,7 @@ async def cmd_list(c, m):
         text += f"• <b>{hesc(a.get('title'))}</b>\n"
     text += "\n🔍 <b>Send /listsearch to search uploaded season and episode list for any anime!</b>"
     for part in chunk(text):
-        try: await m.reply(part, parse_mode=PM_HTML, disable_web_page_preview=True)
+        try: await m.reply(part, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError: pass
         await asyncio.sleep(0.3)
 
@@ -1283,7 +1284,7 @@ async def show_anime_content_list(c, chat_id, query):
             eps_str = ", ".join(f"E{e}" for e in eps_sorted)
             text += f"\n🟣 <b>Season {s}</b>\n   ▸ {eps_str}\n"
     for part in chunk(text):
-        try: await c.send_message(chat_id, part, parse_mode=PM_HTML, disable_web_page_preview=True)
+        try: await c.send_message(chat_id, part, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError: pass
         await asyncio.sleep(0.3)
 
@@ -1481,7 +1482,7 @@ async def cmd_editstart(c, m):
                   "▸ Text / Photo / Video / Animation / Document\n"
                   "▸ Vars: {name} {username} {botname}\n"
                   "▸ Reset: /editstart reset",
-                  parse_mode=PM_HTML, disable_web_page_preview=True)
+                  parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
 
 async def es_got(c, m):
     uid = m.from_user.id
@@ -1509,7 +1510,7 @@ async def cmd_clone(c, m):
         await m.reply("⏳ Waiting for token — send it or /cancel"); return
     set_sess(c, uid, "clone_token")
     await m.reply(CLONE_PROMPT, reply_markup=InlineKeyboardMarkup([[btn("🔴 ᴄᴀɴᴄᴇʟ", "cl|cancel")]]),
-                  parse_mode=PM_HTML, disable_web_page_preview=True)
+                  parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
 
 async def clone_token(c, m):
     uid = m.from_user.id
@@ -1556,7 +1557,7 @@ async def clone_token(c, m):
     RUNNING[me.id] = tmp
     clear_sess(c, uid)
     await st.edit(CLONE_SUCCESS.format(name=hesc(m.from_user.first_name or ""), uname=me.username, bid=me.id),
-                  parse_mode=PM_HTML, disable_web_page_preview=True)
+                  parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
     await log_event(tmp, "🎉 ᴄʟᴏɴᴇ ᴄʀᴇᴀᴛᴇᴅ", f"Owner: {uid} (@{m.from_user.username})\nBot: @{me.username} ({me.id})",
                     important=True, uid=uid)
 
@@ -1649,13 +1650,13 @@ async def cmd_supreme(c, m):
 async def cmd_botlist(c, m):
     if not is_supreme(m.from_user.id): return
     for part in chunk(build_botlist_text()):
-        try: await m.reply(part, parse_mode=PM_HTML, disable_web_page_preview=True)
+        try: await m.reply(part, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError: pass
         await asyncio.sleep(0.3)
 
 async def cmd_db(c, m):
     if not is_supreme(m.from_user.id): return
-    await m.reply(build_db_report(), parse_mode=PM_HTML, disable_web_page_preview=True)
+    await m.reply(build_db_report(), parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
 
 async def cmd_restart(c, m):
     if not is_supreme(m.from_user.id): return
@@ -1835,7 +1836,7 @@ async def send_list_to(c, chat_id):
         for e in sorted(seasons[s]):
             text += f"   ▸ Episode {e}\n"
     for part in chunk(text):
-        try: await c.send_message(chat_id, part, parse_mode=PM_HTML, disable_web_page_preview=True)
+        try: await c.send_message(chat_id, part, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError: pass
         await asyncio.sleep(0.3)
 
@@ -1924,11 +1925,11 @@ async def cb_supreme(c, q, parts):
     if act == "botlist":
         await q_safe(q, "🤖")
         for part in chunk(build_botlist_text()):
-            try: await q.message.reply(part, parse_mode=PM_HTML, disable_web_page_preview=True)
+            try: await q.message.reply(part, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
             except RPCError: pass
     elif act == "db":
         await q_safe(q, "🗄️")
-        try: await q.message.reply(build_db_report(), parse_mode=PM_HTML, disable_web_page_preview=True)
+        try: await q.message.reply(build_db_report(), parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError: pass
     elif act == "stats":
         await q_safe(q, "📊")
@@ -2021,7 +2022,7 @@ async def h_callback(c, q):
         elif data == "rf|link":
             link = f"https://t.me/{c.username}?start=ref_{uid}"
             await q_safe(q, "🔗 Link sent!")
-            try: await c.send_message(uid, f"🔗 <code>{link}</code>", parse_mode=PM_HTML, disable_web_page_preview=True)
+            try: await c.send_message(uid, f"🔗 <code>{link}</code>", parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
             except RPCError: pass
         elif data == "rf|stats":
             await q_safe(q, "🏆")
@@ -2031,7 +2032,7 @@ async def h_callback(c, q):
             if not c.is_factory: return
             set_sess(c, uid, "clone_token")
             await q_safe(q, "🤖 Send Bot Token")
-            try: await q.message.reply(CLONE_PROMPT, parse_mode=PM_HTML, disable_web_page_preview=True,
+            try: await q.message.reply(CLONE_PROMPT, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE,
                                        reply_markup=InlineKeyboardMarkup([[btn("🔴 ᴄᴀɴᴄᴇʟ", "cl|cancel")]]))
             except RPCError: pass
         elif data == "cl|cancel":
