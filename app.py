@@ -441,9 +441,11 @@ def get_media(m):
     return None, None, None
 
 # ═════════════════════ ꜱᴇꜱꜱɪᴏɴ / ʀᴀᴛᴇ / ᴘᴇʀᴍꜱ ═════════════════════
-def get_sess(c, uid): return SESSIONS.get((c.bot_id, uid))
-def set_sess(c, uid, step, **data): SESSIONS[(c.bot_id, uid)] = {"step": step, "data": data}
-def clear_sess(c, uid): SESSIONS.pop((c.bot_id, uid), None)
+def get_sess(c, user_id): return SESSIONS.get((c.bot_id, user_id))
+def set_sess(c, user_id, step, **data):
+    data.pop("user_id", None)
+    SESSIONS[(c.bot_id, user_id)] = {"step": step, "data": data}
+def clear_sess(c, user_id): SESSIONS.pop((c.bot_id, user_id), None)
 
 def rate_ok(c, uid):
     k = (c.bot_id, uid); t = now()
@@ -584,15 +586,30 @@ def render_text(template, user, c):
     return (template.replace("{name}", name).replace("{username}", uname)
             .replace("{botname}", hesc(c.username)))
 
-async def send_start_content(c, chat_id, user):
+async def send_start_content(c, chat_id, user, edit_msg=None):
     s = c.store.c("settings").get("start") or {"type": "text", "text": DEFAULT_START}
     text = render_text(s.get("text") or DEFAULT_START, user or {}, c)
     if c.is_factory:
-        rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")], [btn("🤖 ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ʙᴏᴛ", "cloneme")], [btn("🎁 ʀᴇꜰᴇʀ & ᴇᴀʀɴ", "rf|menu")]]
+        rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")], [btn("🤖 ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ʙᴏᴛ", "cloneme")]]
     else:
-        rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")], [btn("🎁 ʀᴇꜰᴇʀ & ᴇᴀʀɴ", "rf|menu")]]
+        rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")]]
     kb = InlineKeyboardMarkup(rows)
     t = s.get("type", "text")
+
+    if edit_msg is not None:
+        try:
+            if edit_msg.text:
+                await edit_msg.edit_text(text, parse_mode=PM_HTML, reply_markup=kb, link_preview_options=LPO_DISABLE)
+                return
+            elif edit_msg.caption:
+                await edit_msg.edit_caption(caption=text, parse_mode=PM_HTML, reply_markup=kb)
+                return
+        except RPCError:
+            try:
+                await edit_msg.delete()
+            except RPCError:
+                pass
+
     try:
         if t == "photo" and s.get("file_id"):
             await c.send_photo(chat_id, s["file_id"], caption=text, parse_mode=PM_HTML, reply_markup=kb)
@@ -628,42 +645,89 @@ async def resolve_thumb(c, ep):
     if p and os.path.exists(p): return p
     tid = ep.get("thumb_id")
     if not tid: return None
+    os.makedirs(THUMB_DIR, exist_ok=True)
     path = os.path.join(THUMB_DIR, f"{c.bot_id}_{ep.get('anime_id','default')}_{ep['season']}_{ep['episode']}.jpg")
     try:
         out = await c.download_media(tid, file_name=path)
         ep["thumb_path"] = out or path
         c.store.flush_soon()
         return ep["thumb_path"]
-    except RPCError:
+    except Exception:
         return None
 
 async def save_episode(c, uid, aid, s, e, file_id, mtype, caption, thumb_id):
-    doc = {"_id": ep_id(aid, s, e), "anime_id": aid, "season": s, "episode": e, "file_id": file_id, "type": mtype,
-           "caption": caption or "", "thumb_id": thumb_id, "thumb_path": None,
-           "uploaded_by": uid, "created_at": now(), "updated_at": now()}
-    await c.store.put("episodes", doc["_id"], doc)
+    existing = await c.store.get("episodes", ep_id(aid, s, e))
+    if existing:
+        fids = existing.get("file_ids") or ([existing["file_id"]] if existing.get("file_id") else [])
+        if file_id not in fids:
+            fids.append(file_id)
+        existing["file_ids"] = fids
+        existing["file_id"] = fids[0]
+        existing["updated_at"] = now()
+        if caption: existing["caption"] = caption
+        if thumb_id: existing["thumb_id"] = thumb_id
+        await c.store.put("episodes", ep_id(aid, s, e), existing)
+        doc = existing
+    else:
+        doc = {"_id": ep_id(aid, s, e), "anime_id": aid, "season": s, "episode": e, "file_id": file_id, "file_ids": [file_id], "type": mtype,
+               "caption": caption or "", "thumb_id": thumb_id, "thumb_path": None,
+               "uploaded_by": uid, "created_at": now(), "updated_at": now()}
+        await c.store.put("episodes", doc["_id"], doc)
     await touch_active(c)
     await log_event(c, "🎬 ᴇᴘɪꜱᴏᴅᴇ ᴜᴘʟᴏᴀᴅᴇᴅ", f"{aid} S{s} E{e}", important=True, uid=uid)
     return doc
 
-async def show_user_anime_list(c, chat_id, edit_msg=None):
+async def show_user_anime_list(c, chat_id, page=1, edit_msg=None):
     animes = c.store.find("animes")
     animes.sort(key=lambda x: x.get("title", "").lower())
+    per_page = 10
+    total = len(animes)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * per_page
+    page_animes = animes[start_idx:start_idx + per_page]
+
     rows = []
-    for a in animes:
-        rows.append([btn(a.get("title", "Anime"), f"usr|anime|{a['_id']}")])
+    # 2 columns per row, up to 5 rows (10 items total)
+    for i in range(0, len(page_animes), 2):
+        pair = page_animes[i:i + 2]
+        row_btns = [btn(a.get("title", "Anime")[:18], f"usr|anime|{a['_id']}") for a in pair]
+        rows.append(row_btns)
+
+    # Navigation buttons for pagination
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(btn("◀️ ᴘʀᴇᴠ", f"usr|anime_list|{page - 1}"))
+        nav.append(btn(f"📄 {page}/{total_pages}", "ignore"))
+        if page < total_pages:
+            nav.append(btn("ɴᴇxᴛ ▶️", f"usr|anime_list|{page + 1}"))
+        rows.append(nav)
+
+    rows.append([btn("🔍 ꜱᴇᴀʀᴄʜ ᴀɴɪᴍᴇ", "usr|search_anime")])
     rows.append([btn("🔙 ʙᴀᴄᴋ", "usr|home")])
-    txt = "📺 <b>ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ:</b>"
+
+    txt = f"📺 <b>ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ</b> (Total: <b>{total}</b>):"
     kb = InlineKeyboardMarkup(rows)
     if edit_msg is not None:
-        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
-        except RPCError: pass
+        try:
+            if edit_msg.text:
+                await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+            elif edit_msg.caption:
+                await edit_msg.delete()
+                await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
+        except RPCError:
+            await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
     else:
         await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
 
 async def show_user_season_list(c, chat_id, aid, edit_msg=None):
     anime = await c.store.get("animes", aid)
     title = anime.get("title", "Anime") if anime else "Anime"
+    banner_fid = anime.get("banner_file_id") if anime else None
+    banner_cap = anime.get("banner_caption") if anime else None
+
     eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid]
     s_set = {v["season"] for v in eps if "season" in v}
     st_map = (anime or {}).get("seasons", {})
@@ -673,17 +737,35 @@ async def show_user_season_list(c, chat_id, aid, edit_msg=None):
     for sn in seasons:
         rows.append([btn(f"📚 ꜱᴇᴀꜱᴏɴ {sn}", f"usr|season|{aid}|{sn}")])
     rows.append([btn("🔙 ʙᴀᴄᴋ", "usr|anime_list")])
+
     txt = f"📺 <b>{hesc(title)} — ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ:</b>"
+    if banner_cap:
+        txt = f"📺 <b>{hesc(title)}</b>\n\n{banner_cap}\n\n<b>ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ:</b>"
+
     kb = InlineKeyboardMarkup(rows)
+
     if edit_msg is not None:
-        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
-        except RPCError: pass
-    else:
-        await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
+        try:
+            await edit_msg.delete()
+        except RPCError:
+            pass
+
+    if banner_fid:
+        try:
+            await c.send_photo(chat_id, banner_fid, caption=txt, reply_markup=kb, parse_mode=PM_HTML)
+            return
+        except RPCError:
+            pass
+    await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
 
 async def show_user_episode_list(c, chat_id, aid, sn, edit_msg=None):
     anime = await c.store.get("animes", aid)
     title = anime.get("title", "Anime") if anime else "Anime"
+    st_map = (anime or {}).get("seasons", {})
+    s_info = st_map.get(str(sn), {}) if isinstance(st_map.get(str(sn)), dict) else {}
+    s_banner_fid = s_info.get("banner_file_id") or (anime or {}).get("banner_file_id")
+    s_banner_cap = s_info.get("banner_caption")
+
     eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid and v.get("season") == sn]
     eps.sort(key=lambda x: x.get("episode", 0))
     rows = []
@@ -691,13 +773,26 @@ async def show_user_episode_list(c, chat_id, aid, sn, edit_msg=None):
         en = ep.get("episode", 0)
         rows.append([btn(f"🎬 ᴇᴘɪꜱᴏᴅᴇ {en}", f"usr|ep|{aid}|{sn}|{en}")])
     rows.append([btn("🔙 ʙᴀᴄᴋ", f"usr|anime|{aid}")])
+
     txt = f"📺 <b>{hesc(title)} • ꜱᴇᴀꜱᴏɴ {sn} — ꜱᴇʟᴇᴄᴛ ᴇᴘɪꜱᴏᴅᴇ:</b>"
+    if s_banner_cap:
+        txt = f"📺 <b>{hesc(title)} • ꜱᴇᴀꜱᴏɴ {sn}</b>\n\n{s_banner_cap}\n\n<b>ꜱᴇʟᴇᴄᴛ ᴇᴘɪꜱᴏᴅᴇ:</b>"
+
     kb = InlineKeyboardMarkup(rows)
+
     if edit_msg is not None:
-        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
-        except RPCError: pass
-    else:
-        await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
+        try:
+            await edit_msg.delete()
+        except RPCError:
+            pass
+
+    if s_banner_fid:
+        try:
+            await c.send_photo(chat_id, s_banner_fid, caption=txt, reply_markup=kb, parse_mode=PM_HTML)
+            return
+        except RPCError:
+            pass
+    await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
 
 async def send_episode(c, chat_id, aid, s, e, user=None):
     ep = await c.store.get("episodes", ep_id(aid, s, e))
@@ -711,32 +806,38 @@ async def send_episode(c, chat_id, aid, s, e, user=None):
         [btn("🏠 ʙᴀᴄᴋ ᴛᴏ ꜱᴛᴀʀᴛ", "usr|home")]
     ])
     thumb = await resolve_thumb(c, ep)
-    t = ep.get("type", "video")
-    sent = False
-    for attempt in range(2):
-        try:
-            if t == "animation":
-                await c.send_animation(chat_id, ep["file_id"], caption=caption, parse_mode=PM_HTML, reply_markup=kb)
-            elif t == "document":
-                await c.send_document(chat_id, ep["file_id"], caption=caption, parse_mode=PM_HTML,
-                                      reply_markup=kb, thumb=thumb)
-            else:
-                await c.send_video(chat_id, ep["file_id"], caption=caption, parse_mode=PM_HTML,
-                                   reply_markup=kb, thumb=thumb)
-            sent = True
-            break
-        except FloodWait as f:
-            if attempt == 0:
-                await asyncio.sleep(min(f.value, 60))
-        except RPCError as ex:
-            LOG.error("send_episode: %s", ex)
-            break
-    if not sent:
-        try:
-            await c.send_message(chat_id, "⚠️ <b>ꜰᴀɪʟᴇᴅ ᴛᴏ ꜱᴇɴᴅ ꜰɪʟᴇ.</b> Try again later.", parse_mode=PM_HTML)
-        except RPCError:
-            pass
-        return True
+
+    file_ids = ep.get("file_ids") or ([ep["file_id"]] if ep.get("file_id") else [])
+    if not file_ids:
+        return False
+
+    total_files = len(file_ids)
+    for idx, fid in enumerate(file_ids):
+        is_last = (idx == total_files - 1)
+        reply_kb = kb if is_last else None
+        sent = False
+        t = ep.get("type", "video")
+        for attempt in range(2):
+            try:
+                if t == "animation":
+                    await c.send_animation(chat_id, fid, caption=(caption if is_last else None), parse_mode=PM_HTML, reply_markup=reply_kb)
+                elif t == "document":
+                    await c.send_document(chat_id, fid, caption=(caption if is_last else None), parse_mode=PM_HTML, reply_markup=reply_kb, thumb=thumb)
+                else:
+                    await c.send_video(chat_id, fid, caption=(caption if is_last else None), parse_mode=PM_HTML, reply_markup=reply_kb, thumb=thumb)
+                sent = True
+                break
+            except FloodWait as fw:
+                if attempt == 0:
+                    await asyncio.sleep(min(fw.value, 60))
+            except RPCError as ex:
+                LOG.error("send_episode file sending error: %s", ex)
+                break
+        if not sent and is_last and total_files == 1:
+            try: await c.send_message(chat_id, "⚠️ <b>ꜰᴀɪʟᴇᴅ ᴛᴏ ꜱᴇɴᴅ ꜰɪʟᴇ.</b> Try again later.", parse_mode=PM_HTML)
+            except RPCError: pass
+            return True
+
     await touch_active(c)
     await c.store.put("activity", secrets.token_hex(5),
                       {"event": "📤 ᴇᴘɪꜱᴏᴅᴇ ꜱᴇɴᴛ", "detail": f"S{s} E{e} → {chat_id}", "uid": chat_id, "at": now()})
@@ -1008,9 +1109,10 @@ async def cmd_done(c, m):
     s = get_sess(c, uid)
     if s and s["step"] == "ns_video":
         d = s["data"]
-        await m.reply(f"🏁 <b>Season {d['ns_season']} Complete!</b>\n\n✅ {d.get('added', 0)} episodes added",
+        sn_val = d.get("season") or d.get("ns_season") or "?"
+        await m.reply(f"🏁 <b>Season {sn_val} Complete!</b>\n\n✅ {d.get('added', 0)} episodes added",
                       parse_mode=PM_HTML)
-        await log_event(c, "🏁 ꜱᴇᴀꜱᴏɴ ʙᴀᴛᴄʜ ᴅᴏɴᴇ", f"S{d['ns_season']} • {d.get('added',0)} eps", uid=uid)
+        await log_event(c, "🏁 ꜱᴇᴀꜱᴏɴ ʙᴀᴛᴄʜ ᴅᴏɴᴇ", f"S{sn_val} • {d.get('added',0)} eps", uid=uid)
         clear_sess(c, uid)
     elif s and str(s["step"]).startswith("up_"):
         await m.reply(f"🏁 <b>Upload Session Finished!</b>\n\n✅ {s['data'].get('added', 0)} episodes added",
@@ -1043,17 +1145,299 @@ async def show_editor(c, chat_id, aid, s, e):
            f"⏰ Updated: {dt(ep.get('updated_at', 0))}\n\nSelect:")
     await c.send_message(chat_id, txt, reply_markup=edit_kb(aid, s, e), parse_mode=PM_HTML)
 
+async def show_admin_edit_menu(c, chat_id, edit_msg=None):
+    animes = c.store.find("animes")
+    animes.sort(key=lambda x: x.get("title", "").lower())
+    rows = []
+    for a in animes:
+        rows.append([btn(a.get("title", "Anime"), f"adm_edit|anime|{a['_id']}")])
+    rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|refresh")])
+    txt = "✏️ <b>ADMIN EDIT PANEL — SELECT ANIME TO EDIT:</b>"
+    kb = InlineKeyboardMarkup(rows)
+    if edit_msg is not None:
+        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+        except RPCError: pass
+    else:
+        await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
+
+async def show_admin_delete_menu(c, chat_id, edit_msg=None):
+    rows = [
+        [btn("🗑️ ʀᴇᴍᴏᴠᴇ ᴀɴɪᴍᴇ", "adm_del|sel_anime_remove")],
+        [btn("🎬 ʀᴇᴍᴏᴠᴇ ᴇᴘɪꜱᴏᴅᴇ", "adm_del|sel_anime_ep")],
+        [btn("🔙 ʙᴀᴄᴋ", "pan|refresh")]
+    ]
+    txt = "🗑️ <b>ADMIN DELETE PANEL — SELECT OPTION:</b>"
+    kb = InlineKeyboardMarkup(rows)
+    if edit_msg is not None:
+        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+        except RPCError: pass
+    else:
+        await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
+
+async def cb_adm_edit_menu(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "edit"):
+        await q_safe(q, "❌ NO EDIT PERMISSION!"); return
+    act = parts[1]
+    if act == "anime":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        rows = [
+            [btn("🖼️ Edit Anime Banner", f"adm_edit|edit_abanner|{aid}")],
+            [btn("📝 Edit Anime Caption", f"adm_edit|edit_acap|{aid}")],
+            [btn("📚 Edit Season Banner/Caption", f"adm_edit|sel_season|{aid}")],
+            [btn("🎬 Edit Episode", f"adm_edit|sel_ep_season|{aid}")],
+            [btn("🔙 ʙᴀᴄᴋ", "pan|edit")]
+        ]
+        txt = f"✏️ <b>EDIT OPTIONS FOR:</b> <code>{hesc(title)}</code>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "edit_abanner":
+        aid = parts[2]
+        set_sess(c, uid, "edit_anime_banner", anime_id=aid)
+        await q_safe(q, "🖼️ Send Banner Image")
+        try: await q.message.edit_text("🖼️ <b>Send new banner photo for this Anime:</b>\n\n(or send 'remove' to delete banner)", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "edit_acap":
+        aid = parts[2]
+        set_sess(c, uid, "edit_anime_caption", anime_id=aid)
+        await q_safe(q, "📝 Send Caption")
+        try: await q.message.edit_text("📝 <b>Send new caption/description for this Anime:</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "sel_season":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid]
+        s_set = {v["season"] for v in eps if "season" in v}
+        st_map = (anime or {}).get("seasons", {})
+        s_set.update(int(k) for k in st_map.keys() if str(k).isdigit())
+        seasons = sorted(s_set)
+        rows = []
+        for sn in seasons:
+            rows.append([btn(f"📚 Season {sn}", f"adm_edit|edit_season_opts|{aid}|{sn}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", f"adm_edit|anime|{aid}")])
+        txt = "📚 <b>SELECT SEASON TO EDIT BANNER/CAPTION:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "edit_season_opts":
+        aid, sn = parts[2], int(parts[3])
+        rows = [
+            [btn("🖼️ Edit Season Banner", f"adm_edit|edit_sbanner|{aid}|{sn}")],
+            [btn("📝 Edit Season Caption", f"adm_edit|edit_scap|{aid}|{sn}")],
+            [btn("🔙 ʙᴀᴄᴋ", f"adm_edit|sel_season|{aid}")]
+        ]
+        txt = f"📚 <b>EDIT SEASON {sn} OPTIONS:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "edit_sbanner":
+        aid, sn = parts[2], int(parts[3])
+        set_sess(c, uid, "edit_season_banner", anime_id=aid, season=sn)
+        await q_safe(q, "🖼️ Send Banner Image")
+        try: await q.message.edit_text(f"🖼️ <b>Send new banner photo for Season {sn}:</b>\n\n(or send 'remove' to delete banner)", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "edit_scap":
+        aid, sn = parts[2], int(parts[3])
+        set_sess(c, uid, "edit_season_caption", anime_id=aid, season=sn)
+        await q_safe(q, "📝 Send Caption")
+        try: await q.message.edit_text(f"📝 <b>Send new caption text for Season {sn}:</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "sel_ep_season":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid]
+        s_set = {v["season"] for v in eps if "season" in v}
+        seasons = sorted(s_set)
+        rows = []
+        for sn in seasons:
+            rows.append([btn(f"📚 Season {sn}", f"adm_edit|sel_ep_list|{aid}|{sn}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", f"adm_edit|anime|{aid}")])
+        txt = "🎬 <b>SELECT SEASON TO EDIT EPISODES:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "sel_ep_list":
+        aid, sn = parts[2], int(parts[3])
+        eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid and v.get("season") == sn]
+        eps.sort(key=lambda x: x.get("episode", 0))
+        rows = []
+        for ep in eps:
+            en = ep.get("episode", 0)
+            rows.append([btn(f"🎬 Episode {en}", f"adm_edit|show_editor|{aid}|{sn}|{en}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", f"adm_edit|sel_ep_season|{aid}")])
+        txt = f"🎬 <b>SEASON {sn} — SELECT EPISODE TO EDIT:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "show_editor":
+        aid, sn, en = parts[2], int(parts[3]), int(parts[4])
+        await show_editor(c, q.message.chat.id, aid, sn, en)
+
+async def cb_adm_del_menu(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "delete"):
+        await q_safe(q, "❌ NO DELETE PERMISSION!"); return
+    act = parts[1]
+    if act == "sel_anime_remove":
+        animes = c.store.find("animes")
+        animes.sort(key=lambda x: x.get("title", "").lower())
+        rows = []
+        for a in animes:
+            rows.append([btn(a.get("title", "Anime"), f"adm_del|confirm_1|{a['_id']}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|del")])
+        txt = "🗑️ <b>SELECT ANIME TO REMOVE COMPLETELY:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "confirm_1":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        rows = [
+            [btn("⚠️ YES, DELETE (1/3)", f"adm_del|confirm_2|{aid}")],
+            [btn("❌ CANCEL", "pan|del")]
+        ]
+        txt = f"⚠️ <b>CONFIRM DELETION (1/3)</b>\n\nAre you sure you want to delete <b>{hesc(title)}</b> and ALL its episodes?"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "confirm_2":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        rows = [
+            [btn("🚨 REALLY DELETE? (2/3)", f"adm_del|confirm_3|{aid}")],
+            [btn("❌ CANCEL", "pan|del")]
+        ]
+        txt = f"🚨 <b>CONFIRM DELETION (2/3)</b>\n\nThis action cannot be undone! Delete <b>{hesc(title)}</b>?"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "confirm_3":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        rows = [
+            [btn("🔥 FINAL CONFIRM (3/3) - REMOVE NOW", f"adm_del|do_remove_anime|{aid}")],
+            [btn("❌ CANCEL", "pan|del")]
+        ]
+        txt = f"🔥 <b>FINAL WARNING (3/3)</b>\n\nClicking below will PERMANENTLY REMOVE <b>{hesc(title)}</b>!"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "do_remove_anime":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        # Delete anime document
+        await c.store.delete("animes", aid)
+        # Delete all episodes for this anime
+        eps = [k for k, v in c.store.c("episodes").items() if v.get("anime_id") == aid]
+        for k in eps:
+            await c.store.delete("episodes", k)
+        await log_event(c, "🗑️ ᴀɴɪᴍᴇ ʀᴇᴍᴏᴠᴇᴅ", f"Anime {aid} ({title}) + {len(eps)} eps removed", important=True, uid=uid)
+        await q_safe(q, "🗑️ Anime Removed!")
+        try: await q.message.edit_text(f"✅ <b>Anime '{hesc(title)}' and all its episodes have been completely deleted!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "sel_anime_ep":
+        animes = c.store.find("animes")
+        animes.sort(key=lambda x: x.get("title", "").lower())
+        rows = []
+        for a in animes:
+            rows.append([btn(a.get("title", "Anime"), f"adm_del|ep_season|{a['_id']}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|del")])
+        txt = "🎬 <b>SELECT ANIME TO REMOVE EPISODE FROM:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "ep_season":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid]
+        s_set = {v["season"] for v in eps if "season" in v}
+        seasons = sorted(s_set)
+        rows = []
+        for sn in seasons:
+            rows.append([btn(f"📚 Season {sn}", f"adm_del|ep_list|{aid}|{sn}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", "adm_del|sel_anime_ep")])
+        txt = "📚 <b>SELECT SEASON:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "ep_list":
+        aid, sn = parts[2], int(parts[3])
+        eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid and v.get("season") == sn]
+        eps.sort(key=lambda x: x.get("episode", 0))
+        rows = []
+        for ep in eps:
+            en = ep.get("episode", 0)
+            rows.append([btn(f"🎬 Episode {en}", f"adm_del|preview_ep|{aid}|{sn}|{en}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", f"adm_del|ep_season|{aid}")])
+        txt = f"🎬 <b>SEASON {sn} — SELECT EPISODE TO REMOVE:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "preview_ep":
+        aid, sn, en = parts[2], int(parts[3]), int(parts[4])
+        ep = await c.store.get("episodes", ep_id(aid, sn, en))
+        if not ep:
+            await q_safe(q, "❌ Not found!"); return
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        rows = [
+            [btn("🗑️ DELETE THIS EPISODE", f"adm_del|do_delete_ep|{aid}|{sn}|{en}")],
+            [btn("❌ CANCEL / BACK", f"adm_del|ep_list|{aid}|{sn}")]
+        ]
+        fids = ep.get("file_ids") or ([ep["file_id"]] if ep.get("file_id") else [])
+        txt = (f"🔍 <b>EPISODE PREVIEW & CONFIRM:</b>\n\n"
+               f"📺 Anime: <b>{hesc(title)}</b>\n"
+               f"📚 Season: <b>{sn}</b> | Episode: <b>{en}</b>\n"
+               f"📁 Video files: <b>{len(fids)}</b>\n"
+               f"📝 Caption: {(ep.get('caption') or '—')[:80]}")
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "do_delete_ep":
+        aid, sn, en = parts[2], int(parts[3]), int(parts[4])
+        await do_delete(c, q.message.chat.id, aid, sn, en)
+        await q_safe(q, f"🗑️ Deleted S{sn} E{en}")
+
+async def cb_adm_list_menu(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "list"):
+        await q_safe(q, "❌ NO LIST PERMISSION!"); return
+    act = parts[1]
+    if act == "menu":
+        animes = c.store.find("animes")
+        animes.sort(key=lambda x: x.get("title", "").lower())
+        rows = []
+        for a in animes:
+            rows.append([btn(a.get("title", "Anime"), f"adm_list|detail|{a['_id']}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|refresh")])
+        txt = "📋 <b>ADMIN ANIME LIST — CLICK ANIME FOR DETAILS:</b>"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "detail":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid]
+        seasons = {}
+        for ep in eps:
+            seasons.setdefault(ep["season"], []).append(ep["episode"])
+        txt = f"📺 <b>{hesc(title)}</b>\n━━━━━━━━━━━━━━\n"
+        if not seasons:
+            txt += "\n📭 No episodes uploaded yet."
+        else:
+            for s in sorted(seasons):
+                eps_sorted = sorted(seasons[s])
+                eps_str = ", ".join(f"E{e}" for e in eps_sorted)
+                txt += f"\n🟣 <b>Season {s}</b>\n   ▸ {eps_str}\n"
+        rows = [[btn("🔙 ʙᴀᴄᴋ", "adm_list|menu")]]
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+
 async def cmd_edit(c, m):
     uid = m.from_user.id
     if not await perm_ok(c, uid, "edit"):
         await m.reply("❌ <b>NO EDIT PERMISSION!</b>", parse_mode=PM_HTML); return
-    await show_admin_anime_select(c, m.chat.id, title="✏️ <b>ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ ᴛᴏ ᴇᴅɪᴛ:</b>", extra_prefix="ed_sel_anime")
+    await show_admin_edit_menu(c, m.chat.id)
 
 async def cmd_delete(c, m):
     uid = m.from_user.id
     if not await perm_ok(c, uid, "delete"):
         await m.reply("❌ <b>NO DELETE PERMISSION!</b>", parse_mode=PM_HTML); return
-    await show_admin_anime_select(c, m.chat.id, title="🗑️ <b>ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ ᴛᴏ ᴅᴇʟᴇᴛᴇ ꜰʀᴏᴍ:</b>", extra_prefix="del_sel_anime")
+    await show_admin_delete_menu(c, m.chat.id)
 
 async def do_delete(c, chat_id, aid, s, e):
     ep = await c.store.get("episodes", ep_id(aid, s, e))
@@ -1292,7 +1676,7 @@ async def show_anime_content_list(c, chat_id, query):
 def admin_panel_kb():
     return InlineKeyboardMarkup([
         [btn("🟢 Upload", "pan|upload"), btn("🔵 Edit", "pan|edit"), btn("🔴 Delete", "pan|del")],
-        [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "pan|list")],
+        [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "adm_list|menu")],
         [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")]])
 
 async def cmd_admin(c, m):
@@ -1770,9 +2154,10 @@ async def ed_apply(c, m, kind):
             tid = m.photo.file_id if m.photo else (m.video.thumbs[0].file_id if m.video and m.video.thumbs else None)
             if not tid:
                 await m.reply("🖼️ Send photo!", parse_mode=PM_HTML); return
+            os.makedirs(THUMB_DIR, exist_ok=True)
             path = os.path.join(THUMB_DIR, f"{c.bot_id}_{aid}_{sn}_{en}.jpg")
             try: await c.download_media(tid, file_name=path)
-            except RPCError: path = None
+            except Exception: path = None
             await c.store.update("episodes", ep_id(aid, sn, en), thumb_id=tid, thumb_path=path, updated_at=now())
         await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"{aid} S{sn} E{en} — Thumb Updated", important=True, uid=uid)
     clear_sess(c, uid)
@@ -1791,13 +2176,11 @@ async def cb_panel(c, q, parts):
         await q_safe(q, "⬆️"); set_sess(c, uid, "up_menu")
         await show_upload_menu(c, None, edit_msg=q.message)
     elif act == "edit":
-        await q_safe(q, "✏️"); set_sess(c, uid, "ed_ref")
-        try: await q.message.edit_text("✏️ <b>Send episode reference:</b>\n▸ S1 E4", parse_mode=PM_HTML)
-        except RPCError: pass
+        await q_safe(q, "✏️")
+        await show_admin_edit_menu(c, q.message.chat.id, edit_msg=q.message)
     elif act == "del":
-        await q_safe(q, "🗑"); set_sess(c, uid, "del_ref")
-        try: await q.message.edit_text("🗑️ <b>Send reference to delete:</b>\n▸ Season 1 Episode 4", parse_mode=PM_HTML)
-        except RPCError: pass
+        await q_safe(q, "🗑")
+        await show_admin_delete_menu(c, q.message.chat.id, edit_msg=q.message)
     elif act == "bc":
         await q_safe(q, "📣")
         try: await q.message.edit_text("📣 <b>Broadcast:</b> Reply to any message with /broadcast", parse_mode=PM_HTML)
@@ -1963,10 +2346,20 @@ async def h_callback(c, q):
         elif data == "usr|home":
             await q_safe(q, "🏠 Home")
             user = await c.store.get("users", uid) or await ensure_user(c, q.from_user)
-            await send_start_content(c, uid, user)
-        elif data == "usr|anime_list":
+            await send_start_content(c, uid, user, edit_msg=q.message)
+        elif data == "usr|anime_list" or data.startswith("usr|anime_list|"):
+            parts = data.split("|")
+            page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 1
             await q_safe(q, "📺 Anime List")
-            await show_user_anime_list(c, uid, edit_msg=q.message)
+            await show_user_anime_list(c, uid, page=page, edit_msg=q.message)
+        elif data == "usr|search_anime":
+            set_sess(c, uid, "usr_search_anime")
+            await q_safe(q, "🔍 Search Anime")
+            kb = InlineKeyboardMarkup([[btn("🔙 ʙᴀᴄᴋ", "usr|anime_list")]])
+            try:
+                await q.message.edit_text("🔍 <b>Send the name or keyword of the anime to search:</b>", reply_markup=kb, parse_mode=PM_HTML)
+            except RPCError:
+                await c.send_message(uid, "🔍 <b>Send the name or keyword of the anime to search:</b>", reply_markup=kb, parse_mode=PM_HTML)
         elif data.startswith("usr|anime|"):
             aid = data.split("|")[2]
             await q_safe(q, "📚 Season List")
@@ -2049,18 +2442,12 @@ async def h_callback(c, q):
                 await q_safe(q, "🔢 Send Season Number")
                 try: await q.message.edit_text(f"🔢 <b>Send Season Number to mark as {st.upper()}:</b>\n\n(ex: 1)", parse_mode=PM_HTML)
                 except RPCError: pass
-        elif data.startswith("ed_sel_anime|"):
-            aid = data.split("|")[1]
-            set_sess(c, uid, "ed_se_input", anime_id=aid)
-            await q_safe(q, "✏️ Send S1 E1")
-            try: await q.message.edit_text("✏️ <b>Send Season and Episode like this:</b>\n\n<code>S1 E1</code> or <code>Season 1 Episode 1</code>", parse_mode=PM_HTML)
-            except RPCError: pass
-        elif data.startswith("del_sel_anime|"):
-            aid = data.split("|")[1]
-            set_sess(c, uid, "del_se_input", anime_id=aid)
-            await q_safe(q, "🗑️ Send S1 E1")
-            try: await q.message.edit_text("🗑️ <b>Send Season and Episode to delete like this:</b>\n\n<code>S1 E1</code> or <code>Season 1 Episode 1</code>", parse_mode=PM_HTML)
-            except RPCError: pass
+        elif data.startswith("adm_edit|"):
+            await cb_adm_edit_menu(c, q, data.split("|"))
+        elif data.startswith("adm_del|"):
+            await cb_adm_del_menu(c, q, data.split("|"))
+        elif data.startswith("adm_list|"):
+            await cb_adm_list_menu(c, q, data.split("|"))
         elif data.startswith("up|"):
             await cb_upload(c, q, data.split("|"))
         elif data.startswith("ed|"):
@@ -2088,13 +2475,127 @@ async def route_session(c, m, s):
     step = s.get("step")
     if step == "clone_token":
         await clone_token(c, m)
-    elif step == "up_new_anime_name" and m.text:
-        title = m.text.strip()
+    elif step == "up_new_anime_name":
+        title = (m.text or "").strip()
         if not title:
             await m.reply("❌ Send a valid anime name!", parse_mode=PM_HTML); return
         anime = await get_or_create_anime(c.store, title)
+        set_sess(c, uid, "up_new_anime_thumb", anime_id=anime["_id"])
+        await m.reply(f"🖼️ <b>Send Thumbnail / Banner Image for {hesc(title)}:</b>\n\n(or send /skip to skip image)", parse_mode=PM_HTML)
+    elif step == "up_new_anime_thumb":
+        d = s["data"]
+        aid = d["anime_id"]
+        anime = await c.store.get("animes", aid)
+        if m.text and m.text.strip().lower() == "/skip":
+            fid = None
+        elif m.photo:
+            fid = m.photo.file_id
+        else:
+            await m.reply("🖼️ Send a photo or /skip:", parse_mode=PM_HTML); return
+        d["banner_file_id"] = fid
+        set_sess(c, uid, "up_new_anime_cap", **d)
+        await m.reply("📝 <b>Send Caption / Description for this Anime:</b>\n\n(or send /skip to skip caption)", parse_mode=PM_HTML)
+    elif step == "up_new_anime_cap":
+        d = s["data"]
+        aid = d["anime_id"]
+        cap = "" if (m.text and m.text.strip().lower() == "/skip") else (m.text or m.caption or "")
+        await c.store.update("animes", aid, banner_file_id=d.get("banner_file_id"), banner_caption=cap)
+        set_sess(c, uid, "up_new_season_num", anime_id=aid)
+        await m.reply("🔢 <b>Send Season Number to add (ex: 1):</b>", parse_mode=PM_HTML)
+    elif step == "up_new_season_num":
+        txt = (m.text or "").strip()
+        if not txt.isdigit() or not (1 <= int(txt) <= 999):
+            await m.reply("🔢 Send a valid season number (ex: 1):", parse_mode=PM_HTML); return
+        sn = int(txt)
+        d = s["data"]
+        d["season"] = sn
+        set_sess(c, uid, "up_new_season_thumb", **d)
+        await m.reply(f"🖼️ <b>Send Thumbnail / Banner Image for Season {sn}:</b>\n\n(or send /skip to skip)", parse_mode=PM_HTML)
+    elif step == "up_new_season_thumb":
+        d = s["data"]
+        if m.text and m.text.strip().lower() == "/skip":
+            fid = None
+        elif m.photo:
+            fid = m.photo.file_id
+        else:
+            await m.reply("🖼️ Send a photo or /skip:", parse_mode=PM_HTML); return
+        d["season_banner_file_id"] = fid
+        set_sess(c, uid, "up_new_season_cap", **d)
+        await m.reply(f"📝 <b>Send Caption / Description for Season {d['season']}:</b>\n\n(or send /skip to skip)", parse_mode=PM_HTML)
+    elif step == "up_new_season_cap":
+        d = s["data"]
+        aid = d["anime_id"]
+        sn = d["season"]
+        cap = "" if (m.text and m.text.strip().lower() == "/skip") else (m.text or m.caption or "")
+        anime = await c.store.get("animes", aid)
+        if anime:
+            seasons = anime.setdefault("seasons", {})
+            seasons[str(sn)] = {"banner_file_id": d.get("season_banner_file_id"), "banner_caption": cap, "updated_at": now()}
+            await c.store.update("animes", aid, seasons=seasons)
+        set_sess(c, uid, "up_video", anime_id=aid, season=sn, episode=1, added=0)
+        await m.reply(f"📤 <b>Send Video for Season {sn} Episode 1:</b>\n\nSend videos one by one...\n🏁 Send /done when finished or /cancel", parse_mode=PM_HTML)
+    elif step == "edit_anime_banner":
+        aid = s["data"]["anime_id"]
+        if m.text and m.text.strip().lower() == "remove":
+            fid = None
+        elif m.photo:
+            fid = m.photo.file_id
+        else:
+            await m.reply("🖼️ Send photo or 'remove':", parse_mode=PM_HTML); return
+        await c.store.update("animes", aid, banner_file_id=fid)
         clear_sess(c, uid)
-        await show_upload_options(c, m.chat.id, anime["_id"])
+        await m.reply("✅ <b>Anime banner updated!</b>", parse_mode=PM_HTML)
+    elif step == "edit_anime_caption":
+        aid = s["data"]["anime_id"]
+        cap = m.text or m.caption or ""
+        await c.store.update("animes", aid, banner_caption=cap)
+        clear_sess(c, uid)
+        await m.reply("✅ <b>Anime caption updated!</b>", parse_mode=PM_HTML)
+    elif step == "edit_season_banner":
+        d = s["data"]; aid, sn = d["anime_id"], d["season"]
+        if m.text and m.text.strip().lower() == "remove":
+            fid = None
+        elif m.photo:
+            fid = m.photo.file_id
+        else:
+            await m.reply("🖼️ Send photo or 'remove':", parse_mode=PM_HTML); return
+        anime = await c.store.get("animes", aid)
+        if anime:
+            seasons = anime.setdefault("seasons", {})
+            s_dict = seasons.setdefault(str(sn), {})
+            s_dict["banner_file_id"] = fid
+            s_dict["updated_at"] = now()
+            await c.store.update("animes", aid, seasons=seasons)
+        clear_sess(c, uid)
+        await m.reply(f"✅ <b>Season {sn} banner updated!</b>", parse_mode=PM_HTML)
+    elif step == "edit_season_caption":
+        d = s["data"]; aid, sn = d["anime_id"], d["season"]
+        cap = m.text or m.caption or ""
+        anime = await c.store.get("animes", aid)
+        if anime:
+            seasons = anime.setdefault("seasons", {})
+            s_dict = seasons.setdefault(str(sn), {})
+            s_dict["banner_caption"] = cap
+            s_dict["updated_at"] = now()
+            await c.store.update("animes", aid, seasons=seasons)
+        clear_sess(c, uid)
+        await m.reply(f"✅ <b>Season {sn} caption updated!</b>", parse_mode=PM_HTML)
+    elif step == "usr_search_anime" and m.text:
+        query = m.text.strip().lower()
+        clear_sess(c, uid)
+        all_animes = c.store.find("animes")
+        matched = [a for a in all_animes if query in a.get("title", "").strip().lower()]
+        if not matched:
+            kb = InlineKeyboardMarkup([[btn("🔍 ꜱᴇᴀʀᴄʜ ᴀɢᴀɪɴ", "usr|search_anime")], [btn("🔙 ʙᴀᴄᴋ", "usr|anime_list")]])
+            await m.reply(f"❌ <b>No anime found matching:</b> <code>{hesc(m.text)}</code>", reply_markup=kb, parse_mode=PM_HTML)
+            return
+        rows = []
+        for i in range(0, len(matched[:10]), 2):
+            pair = matched[i:i + 2]
+            rows.append([btn(a.get("title", "Anime")[:18], f"usr|anime|{a['_id']}") for a in pair])
+        rows.append([btn("🔍 ꜱᴇᴀʀᴄʜ ᴀɢᴀɪɴ", "usr|search_anime"), btn("🔙 ʙᴀᴄᴋ", "usr|anime_list")])
+        txt = f"🔍 <b>ꜱᴇᴀʀᴄʜ ʀᴇꜱᴜʟᴛꜱ ꜰᴏʀ:</b> <code>{hesc(m.text)}</code>\n\nFound <b>{len(matched)}</b> anime:"
+        await m.reply(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
     elif step == "up_video":
         await up_got_video(c, m)
     elif step == "ns_season" and m.text:
