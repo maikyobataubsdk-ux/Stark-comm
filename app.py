@@ -173,7 +173,7 @@ ROLE_NAME = {"owner": "👑 Owner", "manager": "🛠 Manager", "uploader": "⬆�
              "broadcaster": "📣 Broadcaster", "analyst": "📊 Analyst", "custom": "⚙️ Custom"}
 
 # ═════════════════════ ᴄᴏᴍᴍᴀɴᴅ ꜱᴇᴛꜱ (ᴀᴜᴛᴏ-ꜱᴇᴛ ɪɴ ᴛᴇʟᴇɢʀᴀᴍ) ═════════════════════
-USER_CMD_RAW = [("start", "Start Bot"), ("refer", "Refer & Earn")]
+USER_CMD_RAW = [("start", "Start Bot"), ("help", "Help & Commands"), ("refer", "Refer & Earn")]
 ADMIN_CMD_RAW = [("upload", "Add Episodes"), ("edit", "Edit Episode"), ("delete", "Delete Episode"),
                  ("broadcast", "Send Updates"), ("stats", "Statistics"), ("list", "Episode List"),
                  ("listsearch", "Search Anime List"), ("admin", "Admin Panel"), ("setfs", "Force Subscribe"),
@@ -182,7 +182,7 @@ ADMIN_CMD_RAW = [("upload", "Add Episodes"), ("edit", "Edit Episode"), ("delete"
                  ("seasonend", "Mark Season Ended"), ("coming", "Mark Coming Soon"),
                  ("done", "Finish Upload"), ("cancel", "Cancel Session")]
 FACTORY_CMD_RAW = [("clone", "Create Your Bot")]
-SUPREME_CMD_RAW = [("rajpapa", "Supreme Control Panel"), ("supreme", "Supreme Panel"), ("botlist", "All Bots"), ("db", "Database"), ("restart", "Restart Clones")]
+SUPREME_CMD_RAW = [("supreme", "Supreme Panel"), ("botlist", "All Bots"), ("db", "Database"), ("restart", "Restart Clones")]
 
 ALL_CMDS = ["start", "refer"] + [x[0] for x in ADMIN_CMD_RAW + FACTORY_CMD_RAW + SUPREME_CMD_RAW]
 FACTORY_ONLY = {"clone", "supreme", "rajpapa", "botlist", "db", "restart"}
@@ -608,6 +608,13 @@ async def send_start_content(c, chat_id, user, edit_msg=None):
         rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")], [btn("🤖 ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ʙᴏᴛ", "cloneme")]]
     else:
         rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")]]
+
+    c_btns = (c.store.c("settings").get("custom_buttons") or {}).get("list", [])
+    for r in c_btns:
+        row_arr = [ubtn(b["text"], b["url"]) for b in r if isinstance(b, dict) and "text" in b and "url" in b]
+        if row_arr:
+            rows.append(row_arr)
+
     kb = InlineKeyboardMarkup(rows)
     t = s.get("type", "text")
 
@@ -749,8 +756,10 @@ async def show_user_season_list(c, chat_id, aid, edit_msg=None):
     s_set.update(int(k) for k in st_map.keys() if str(k).isdigit())
     seasons = sorted(s_set)
     rows = []
-    for sn in seasons:
-        rows.append([btn(f"📚 ꜱᴇᴀꜱᴏɴ {sn}", f"usr|season|{aid}|{sn}")])
+    # 2 columns layout for seasons
+    for i in range(0, len(seasons), 2):
+        pair = seasons[i:i + 2]
+        rows.append([btn(f"📚 ꜱᴇᴀꜱᴏɴ {sn}", f"usr|season|{aid}|{sn}") for sn in pair])
     rows.append([btn("🔙 ʙᴀᴄᴋ", "usr|anime_list")])
 
     txt = f"📺 <b>{hesc(title)} — ꜱᴇʟᴇᴄᴛ ꜱᴇᴀꜱᴏɴ:</b>"
@@ -761,7 +770,18 @@ async def show_user_season_list(c, chat_id, aid, edit_msg=None):
 
     if edit_msg is not None:
         try:
-            await edit_msg.delete()
+            if banner_fid:
+                if edit_msg.photo or edit_msg.caption is not None:
+                    await edit_msg.edit_caption(caption=txt, reply_markup=kb, parse_mode=PM_HTML)
+                    return
+                else:
+                    await edit_msg.delete()
+            else:
+                if edit_msg.text:
+                    await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+                    return
+                else:
+                    await edit_msg.delete()
         except RPCError:
             pass
 
@@ -773,7 +793,7 @@ async def show_user_season_list(c, chat_id, aid, edit_msg=None):
             pass
     await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
 
-async def show_user_episode_list(c, chat_id, aid, sn, edit_msg=None):
+async def show_user_episode_list(c, chat_id, aid, sn, page=1, edit_msg=None):
     anime = await c.store.get("animes", aid)
     title = anime.get("title", "Anime") if anime else "Anime"
     st_map = (anime or {}).get("seasons", {})
@@ -783,10 +803,30 @@ async def show_user_episode_list(c, chat_id, aid, sn, edit_msg=None):
 
     eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid and v.get("season") == sn]
     eps.sort(key=lambda x: x.get("episode", 0))
+
+    per_page = 10
+    total = len(eps)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * per_page
+    page_eps = eps[start_idx:start_idx + per_page]
+
     rows = []
-    for ep in eps:
-        en = ep.get("episode", 0)
-        rows.append([btn(f"🎬 ᴇᴘɪꜱᴏᴅᴇ {en}", f"usr|ep|{aid}|{sn}|{en}")])
+    # 2 columns layout for episodes
+    for i in range(0, len(page_eps), 2):
+        pair = page_eps[i:i + 2]
+        rows.append([btn(f"🎬 ᴇᴘɪꜱᴏᴅᴇ {ep.get('episode', 0)}", f"usr|ep|{aid}|{sn}|{ep.get('episode', 0)}") for ep in pair])
+
+    if total_pages > 1:
+        nav = []
+        if page > 1:
+            nav.append(btn("◀️ ᴘʀᴇᴠ", f"usr|season|{aid}|{sn}|{page - 1}"))
+        nav.append(btn(f"📄 {page}/{total_pages}", "ignore"))
+        if page < total_pages:
+            nav.append(btn("ɴᴇxᴛ ▶️", f"usr|season|{aid}|{sn}|{page + 1}"))
+        rows.append(nav)
+
     rows.append([btn("🔙 ʙᴀᴄᴋ", f"usr|anime|{aid}")])
 
     txt = f"📺 <b>{hesc(title)} • ꜱᴇᴀꜱᴏɴ {sn} — ꜱᴇʟᴇᴄᴛ ᴇᴘɪꜱᴏᴅᴇ:</b>"
@@ -797,7 +837,18 @@ async def show_user_episode_list(c, chat_id, aid, sn, edit_msg=None):
 
     if edit_msg is not None:
         try:
-            await edit_msg.delete()
+            if s_banner_fid:
+                if edit_msg.photo or edit_msg.caption is not None:
+                    await edit_msg.edit_caption(caption=txt, reply_markup=kb, parse_mode=PM_HTML)
+                    return
+                else:
+                    await edit_msg.delete()
+            else:
+                if edit_msg.text:
+                    await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+                    return
+                else:
+                    await edit_msg.delete()
         except RPCError:
             pass
 
@@ -969,6 +1020,51 @@ async def send_refer(c, chat_id, uid):
 async def cmd_refer(c, m):
     await ensure_user(c, m.from_user)
     await send_refer(c, m.chat.id, m.from_user.id)
+
+async def cmd_help(c, m):
+    uid = m.from_user.id
+    user = await ensure_user(c, m.from_user)
+    is_adm = is_supreme(uid) or (await c.store.get("admins", uid) is not None)
+
+    txt = ("❓ <b>ʜᴇʟᴘ & ᴄᴏᴍᴍᴀɴᴅꜱ</b>\n━━━━━━━━━━━━━━\n\n"
+           "👤 <b>ᴜꜱᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ:</b>\n"
+           "▸ /start — Start Bot & Main Menu\n"
+           "▸ /help — Show Available Commands\n"
+           "▸ /refer — Refer Friends & Check Stats\n\n"
+           "💡 <b>ʜᴏᴡ ᴛᴏ ꜰɪɴᴅ ᴇᴘɪꜱᴏᴅᴇꜱ:</b>\n"
+           "▸ Tap <b>📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ</b> in main menu\n"
+           "▸ Or send query directly: <code>S1 E4</code> or <code>Anime Name</code>\n")
+
+    if c.is_factory:
+        txt += "\n🤖 <b>ꜰᴀᴄᴛᴏʀʏ ᴄᴏᴍᴍᴀɴᴅ:</b>\n▸ /clone — Create your own bot\n"
+
+    if is_adm:
+        txt += ("\n🛠 <b>ᴀᴅᴍɪɴ ᴄᴏᴍᴍᴀɴᴅꜱ:</b>\n"
+                "▸ /admin — Open Admin Control Panel\n"
+                "▸ /upload — Add Anime Episodes\n"
+                "▸ /edit — Edit Anime / Season / Episode\n"
+                "▸ /delete — Delete Anime or Episode\n"
+                "▸ /broadcast — Broadcast Message to Users\n"
+                "▸ /stats — View Bot Statistics\n"
+                "▸ /list — View Anime List\n"
+                "▸ /listsearch — Search Uploaded Episodes\n"
+                "▸ /setfs — Configure Force Subscribe\n"
+                "▸ /editstart — Customize Start Message\n"
+                "▸ /giveadmin — Add New Admin\n"
+                "▸ /editadmin — Modify Admin Rights\n"
+                "▸ /remadmin — Remove Admin\n"
+                "▸ /ban — Ban User\n"
+                "▸ /unban — Unban User\n")
+
+    if is_supreme(uid):
+        txt += ("\n👑 <b>ꜱᴜᴘʀᴇᴍᴇ ᴄᴏᴍᴍᴀɴᴅꜱ:</b>\n"
+                "▸ /supreme — Supreme Control Panel\n"
+                "▸ /botlist — View All Cloned Bots\n"
+                "▸ /db — Database Insights & Health\n"
+                "▸ /restart — Gracefully Restart Clones\n")
+
+    kb = InlineKeyboardMarkup([[btn("🏠 ʙᴀᴄᴋ ᴛᴏ ʜᴏᴍᴇ", "usr|home")]])
+    await m.reply(txt, reply_markup=kb, parse_mode=PM_HTML)
 
 # ─────────── ᴜᴘʟᴏᴀᴅ ───────────
 async def show_upload_menu(c, chat_id, edit_msg=None):
@@ -1707,7 +1803,8 @@ def admin_panel_kb():
         [btn("🟢 Upload", "pan|upload"), btn("🔵 Edit", "pan|edit"), btn("🔴 Delete", "pan|del")],
         [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "adm_list|menu")],
         [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")],
-        [btn("🚫 Ban User", "pan|banuser"), btn("🟢 Unban User", "pan|unbanuser")]])
+        [btn("🚫 Ban User", "pan|banuser"), btn("🟢 Unban User", "pan|unbanuser")],
+        [btn("🔗 Custom Buttons", "pan|cbtn"), btn("🧹 Clear Database", "pan|cleardb")]])
 
 async def cmd_admin(c, m):
     uid = m.from_user.id
@@ -1953,6 +2050,14 @@ async def es_got(c, m):
 async def cmd_clone(c, m):
     if not c.is_factory: return
     uid = m.from_user.id
+    ok, fs_kb = await fs_state(c, uid)
+    if not ok:
+        await unauthorized(c, uid)
+        try:
+            await m.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b>\n\nYou must join the required channel before creating your bot clone. Press ✅ ᴠᴇʀɪꜰʏ after joining.",
+                          reply_markup=fs_kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
+        except RPCError: pass
+        return
     s = get_sess(c, uid)
     if s and s.get("step") == "clone_token":
         await m.reply("⏳ Waiting for token — send it or /cancel"); return
@@ -2087,7 +2192,7 @@ async def supreme_panel_kb():
     return InlineKeyboardMarkup([
         [btn("🤖 Manage Bots", "sv|manage_bots"), btn("🗄️ Database Insights", "sv|db")],
         [btn("📊 Global Stats", "sv|stats"), btn("♻️ Restart Clones", "sv|restart")],
-        [btn("📣 Global Broadcast", "sv|bc_all")]])
+        [btn("🔐 Clone ForceSub", "sv|setfs"), btn("📣 Global Broadcast", "sv|bc_all")]])
 
 async def cmd_supreme(c, m):
     if not is_supreme(m.from_user.id): return
@@ -2267,6 +2372,50 @@ async def cb_panel(c, q, parts):
         except RPCError: pass
     elif act == "admins":
         await q_safe(q, "👥"); await show_admins_list(c, None, edit_msg=q.message)
+    elif act == "cbtn":
+        await q_safe(q, "🔗 Custom Buttons")
+        c_btns = (c.store.c("settings").get("custom_buttons") or {}).get("list", [])
+        txt = f"🔗 <b>CUSTOM INLINE BUTTONS MANAGER</b>\n━━━━━━━━━━━━━━\n\nTotal Rows Configured: <b>{len(c_btns)}</b>\n\nAdd custom URL buttons to the start message below:"
+        rows = [
+            [btn("➕ Add 1 Button", "pan|add_cbtn_1"), btn("➕ Add 2 Buttons (1 Row)", "pan|add_cbtn_2")],
+            [btn("🗑 Clear All Custom Buttons", "pan|clear_cbtns")],
+            [btn("🔙 ʙᴀᴄᴋ", "pan|refresh")]
+        ]
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "add_cbtn_1":
+        set_sess(c, uid, "cbtn_add_1")
+        await q_safe(q, "➕ Send Button Details")
+        try: await q.message.edit_text("🔗 <b>Send Button Text & Link in this format:</b>\n\n<code>Button Text | https://t.me/example</code>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "add_cbtn_2":
+        set_sess(c, uid, "cbtn_add_2")
+        await q_safe(q, "➕ Send 2 Buttons Details")
+        try: await q.message.edit_text("🔗 <b>Send 2 Buttons for 1 row in this format:</b>\n\n<code>Text 1 | https://link1.com || Text 2 | https://link2.com</code>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "clear_cbtns":
+        await c.store.put("settings", "custom_buttons", {"list": []})
+        await q_safe(q, "🗑 Custom Buttons Cleared!")
+        try: await q.message.edit_text("✅ <b>All custom buttons removed!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "cleardb":
+        await q_safe(q, "🧹 Clear DB")
+        rows = [
+            [btn("⚠️ YES, CLEAR DATABASE NOW", "pan|do_cleardb")],
+            [btn("❌ CANCEL", "pan|refresh")]
+        ]
+        txt = ("⚠️ <b>CONFIRM DATABASE DELETION</b>\n━━━━━━━━━━━━━━\n"
+               "Are you sure you want to clear this bot's database?\n\n"
+               "🔥 <b>All uploaded animes, seasons, episodes, and users will be permanently deleted!</b>")
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "do_cleardb":
+        if not (is_supreme(uid) or (await c.store.get("admins", uid) or {}).get("role") == "owner"):
+            await q_safe(q, "❌ ONLY OWNER CAN CLEAR DATABASE!", alert=True); return
+        await delete_bot_db(c.bot_id)
+        await q_safe(q, "🧹 Database Cleared!")
+        try: await q.message.edit_text("✅ <b>Bot Database has been completely cleared and reset!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
     elif act == "refresh":
         await q_safe(q, "🔄")
         doc = await c.store.get("admins", uid)
@@ -2507,6 +2656,9 @@ async def cb_supreme(c, q, parts):
     elif act == "restart":
         await q_safe(q, "♻️ Restarting...")
         await restart_all(q.message)
+    elif act == "setfs":
+        await q_safe(q, "🔐 Force Sub")
+        await show_fs_panel(c, None, edit_msg=q.message)
     elif act == "bc_all":
         await q_safe(q, "📣")
         try: await q.message.reply("📣 <b>To broadcast to ALL clones:</b>\nReply to any message with <code>/broadcast all</code>", parse_mode=PM_HTML)
@@ -2560,8 +2712,9 @@ async def h_callback(c, q):
         elif data.startswith("usr|season|"):
             parts = data.split("|")
             aid, sn = parts[2], int(parts[3])
+            page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1
             await q_safe(q, f"🎬 Season {sn}")
-            await show_user_episode_list(c, uid, aid, sn, edit_msg=q.message)
+            await show_user_episode_list(c, uid, aid, sn, page=page, edit_msg=q.message)
         elif data.startswith("usr|ep|"):
             parts = data.split("|")
             aid, sn, en = parts[2], int(parts[3]), int(parts[4])
@@ -2616,6 +2769,13 @@ async def h_callback(c, q):
             except RPCError: pass
         elif data == "cloneme":
             if not c.is_factory: return
+            ok, fs_kb = await fs_state(c, uid)
+            if not ok:
+                await unauthorized(c, uid)
+                await q_safe(q, "🔐 Access Locked!", alert=True)
+                try: await q.message.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b>\n\nYou must join the required channel before creating your bot clone. Press ✅ ᴠᴇʀɪꜰʏ after joining.", reply_markup=fs_kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
+                except RPCError: pass
+                return
             set_sess(c, uid, "clone_token")
             await q_safe(q, "🤖 Send Bot Token")
             try: await q.message.reply(CLONE_PROMPT, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE,
@@ -2681,7 +2841,29 @@ async def h_callback(c, q):
 async def route_session(c, m, s):
     uid = m.from_user.id
     step = s.get("step")
-    if step == "clone_token":
+    if step == "cbtn_add_1" and m.text:
+        parts = [x.strip() for x in m.text.split("|") if x.strip()]
+        if len(parts) < 2 or not parts[1].startswith("http"):
+            await m.reply("❌ <b>Invalid format!</b> Use: <code>Text | https://link.com</code>", parse_mode=PM_HTML); return
+        curr = (c.store.c("settings").get("custom_buttons") or {}).get("list", [])
+        curr.append([{"text": parts[0], "url": parts[1]}])
+        await c.store.put("settings", "custom_buttons", {"list": curr})
+        clear_sess(c, uid)
+        await m.reply("✅ <b>Custom button added!</b>", parse_mode=PM_HTML)
+    elif step == "cbtn_add_2" and m.text:
+        rows_in = [r.strip() for r in m.text.split("||") if r.strip()]
+        if len(rows_in) != 2:
+            await m.reply("❌ <b>Invalid format!</b> Use: <code>Text 1 | https://link1.com || Text 2 | https://link2.com</code>", parse_mode=PM_HTML); return
+        p1 = [x.strip() for x in rows_in[0].split("|") if x.strip()]
+        p2 = [x.strip() for x in rows_in[1].split("|") if x.strip()]
+        if len(p1) < 2 or len(p2) < 2 or not p1[1].startswith("http") or not p2[1].startswith("http"):
+            await m.reply("❌ <b>Invalid format!</b> Links must start with http/https.", parse_mode=PM_HTML); return
+        curr = (c.store.c("settings").get("custom_buttons") or {}).get("list", [])
+        curr.append([{"text": p1[0], "url": p1[1]}, {"text": p2[0], "url": p2[1]}])
+        await c.store.put("settings", "custom_buttons", {"list": curr})
+        clear_sess(c, uid)
+        await m.reply("✅ <b>Row of 2 custom buttons added!</b>", parse_mode=PM_HTML)
+    elif step == "clone_token":
         await clone_token(c, m)
     elif step == "up_new_anime_name":
         title = (m.text or "").strip()
@@ -2942,6 +3124,7 @@ async def h_generic(c, m):
 
 # ═════════════════════ ᴄᴏᴍᴍᴀɴᴅ ᴅɪꜱᴘᴀᴛᴄʜᴇʀ ═════════════════════
 CMD_MAP = {
+    "start": cmd_start, "help": cmd_help, "refer": cmd_refer,
     "upload": cmd_upload, "edit": cmd_edit, "delete": cmd_delete, "broadcast": cmd_broadcast,
     "stats": cmd_stats, "list": cmd_list, "listsearch": cmd_listsearch, "admin": cmd_admin, "setfs": cmd_setfs,
     "editstart": cmd_editstart, "giveadmin": cmd_giveadmin, "editadmin": cmd_editadmin,
@@ -3003,12 +3186,14 @@ async def h_join_request(c, update, users, chats):
 
 # ═════════════════════ ʀᴇɢɪꜱᴛʀᴀᴛɪᴏɴ ═════════════════════
 F_START = filters.command("start") & filters.private & filters.incoming
+F_HELP = filters.command("help") & filters.private & filters.incoming
 F_REFER = filters.command("refer") & filters.private & filters.incoming
 F_CMD = filters.command(ALL_CMDS) & filters.private & filters.incoming
 F_GEN = filters.private & filters.incoming & ~filters.command(ALL_CMDS) & ~filters.service
 
 def register_provider_handlers(c, is_factory):
     c.add_handler(MessageHandler(cmd_start, F_START), 0)
+    c.add_handler(MessageHandler(cmd_help, F_HELP), 0)
     c.add_handler(MessageHandler(cmd_refer, F_REFER), 0)
     c.add_handler(MessageHandler(h_admin_cmds, F_CMD), 0)
     c.add_handler(CallbackQueryHandler(h_callback), 0)
