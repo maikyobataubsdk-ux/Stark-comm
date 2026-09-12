@@ -527,9 +527,8 @@ async def apply_commands(c):
         LOG.debug("set_bot_commands default failed: %s", e)
     for uid in list(c.store.c("admins").keys()):
         await apply_admin_commands(c, int(uid))
-    if c.is_factory:
-        for uid in SUPREMES:
-            await apply_admin_commands(c, uid)
+    for uid in SUPREMES:
+        await apply_admin_commands(c, uid)
 
 # ═════════════════════ ᴜꜱᴇʀꜱ / ꜰᴏʀᴄᴇ-ꜱᴜʙ / ꜱᴛᴀʀᴛ ═════════════════════
 async def ensure_user(c, tu):
@@ -2954,7 +2953,7 @@ async def h_admin_cmds(c, m):
             except RPCError: pass
             return
         name = m.command[0].lstrip("/").lower()
-        if name in FACTORY_ONLY and not c.is_factory:
+        if name in FACTORY_ONLY and not c.is_factory and not is_supreme(uid):
             return
         fn = CMD_MAP.get(name)
         if fn:
