@@ -696,7 +696,9 @@ async def save_episode(c, uid, aid, s, e, file_id, mtype, caption, thumb_id):
                "uploaded_by": uid, "created_at": now(), "updated_at": now()}
         await c.store.put("episodes", doc["_id"], doc)
     await touch_active(c)
-    await log_event(c, "🎬 ᴇᴘɪꜱᴏᴅᴇ ᴜᴘʟᴏᴀᴅᴇᴅ", f"{aid} S{s} E{e}", important=True, uid=uid)
+    anime = await c.store.get("animes", aid)
+    title = anime.get("title") if anime else aid
+    await log_event(c, "🎬 ᴇᴘɪꜱᴏᴅᴇ ᴜᴘʟᴏᴀᴅᴇᴅ", f"Anime: {title}\nSeason: {s} | Episode: {e}\nUploaded by: {uid}", important=True, uid=uid)
     return doc
 
 async def show_user_anime_list(c, chat_id, page=1, edit_msg=None):
@@ -1803,8 +1805,29 @@ def admin_panel_kb():
         [btn("🟢 Upload", "pan|upload"), btn("🔵 Edit", "pan|edit"), btn("🔴 Delete", "pan|del")],
         [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "adm_list|menu")],
         [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")],
-        [btn("🚫 Ban User", "pan|banuser"), btn("🟢 Unban User", "pan|unbanuser")],
+        [btn("🧾 Log Channel", "pan|logch"), btn("🚫 Ban User", "pan|banuser"), btn("🟢 Unban User", "pan|unbanuser")],
         [btn("🔗 Custom Buttons", "pan|cbtn"), btn("🧹 Clear Database", "pan|cleardb")]])
+
+def log_panel_kb():
+    return InlineKeyboardMarkup([
+        [btn("📥 Set Log Channel", "log|set"), btn("🔴 Disable Log Channel", "log|off")],
+        [btn("🔙 ʙᴀᴄᴋ", "pan|refresh")]
+    ])
+
+async def show_log_panel(c, chat_id, edit_msg=None):
+    st = cfg(c.store)
+    lc = st.get("log_channel") or "—"
+    txt = (f"🧾 <b>ʟᴏɢ ᴄʜᴀɴɴᴇʟ ꜱᴇᴛᴛɪɴɢꜱ</b>\n━━━━━━━━━━━━━━\n"
+           f"📥 Log Channel ID: <code>{lc}</code>\n\n"
+           f"🔔 Receive notifications for:\n"
+           f"▸ Bot Start\n"
+           f"▸ Episode Uploads\n"
+           f"▸ Anime & Season Updates")
+    if edit_msg is not None:
+        try: await edit_msg.edit_text(txt, reply_markup=log_panel_kb(), parse_mode=PM_HTML)
+        except RPCError: pass
+    else:
+        await c.send_message(chat_id, txt, reply_markup=log_panel_kb(), parse_mode=PM_HTML)
 
 async def cmd_admin(c, m):
     uid = m.from_user.id
@@ -2372,6 +2395,8 @@ async def cb_panel(c, q, parts):
         except RPCError: pass
     elif act == "admins":
         await q_safe(q, "👥"); await show_admins_list(c, None, edit_msg=q.message)
+    elif act == "logch":
+        await q_safe(q, "🧾 Log Channel"); await show_log_panel(c, None, edit_msg=q.message)
     elif act == "cbtn":
         await q_safe(q, "🔗 Custom Buttons")
         c_btns = (c.store.c("settings").get("custom_buttons") or {}).get("list", [])
@@ -2439,6 +2464,22 @@ async def send_list_to(c, chat_id):
         try: await c.send_message(chat_id, part, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
         except RPCError: pass
         await asyncio.sleep(0.3)
+
+async def cb_log(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "manage_admins") and not await perm_ok(c, uid, "forcesub"):
+        await q_safe(q, "❌ NO PERMISSION!"); return
+    act = parts[1]
+    if act == "set":
+        set_sess(c, uid, "log_set")
+        await q_safe(q, "📥 Send Log Channel")
+        try: await q.message.edit_text("🧾 <b>Send Log Channel @username or Chat ID:</b>\n\n(Bot must be an admin in the channel)", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "off":
+        await set_cfg(c.store, log_channel=0)
+        await q_safe(q, "🔴 Log Channel Disabled!")
+        await show_log_panel(c, None, edit_msg=q.message)
+        await log_event(c, "🧾 ʟᴏɢ ᴄʜᴀɴɴᴇʟ ᴅɪꜱᴀʙʟᴇᴅ", "Log Channel set to 0", important=True)
 
 async def cb_fs(c, q, parts):
     uid = q.from_user.id
@@ -2799,6 +2840,7 @@ async def h_callback(c, q):
             st_labels = {"seasonend": "🏁 Season Ended", "coming": "🔔 Coming Soon", "more_episodes": "➕ More Episodes Coming"}
             label = st_labels.get(st_val, st_val)
             await q_safe(q, f"✅ Season {sn} marked: {label}")
+            await log_event(c, "📝 ꜱᴇᴀꜱᴏɴ ꜱᴛᴀᴛᴜꜱ ᴜᴘᴅᴀᴛᴇᴅ", f"Anime: {aid}\nSeason: {sn}\nStatus: {label}", important=True, uid=uid)
             try: await q.message.edit_text(f"✅ <b>Season {sn} status set to: {label}</b>", parse_mode=PM_HTML)
             except RPCError: pass
         elif data.startswith("adm_sel_anime|"):
@@ -2824,6 +2866,8 @@ async def h_callback(c, q):
             await cb_panel(c, q, data.split("|"))
         elif data.startswith("fs|"):
             await cb_fs(c, q, data.split("|"))
+        elif data.startswith("log|"):
+            await cb_log(c, q, data.split("|"))
         elif data.startswith("adm|"):
             await cb_adm(c, q, data.split("|"))
         elif data.startswith("sv|"):
@@ -2933,12 +2977,14 @@ async def route_session(c, m, s):
         else:
             await m.reply("🖼️ Send photo or 'remove':", parse_mode=PM_HTML); return
         await c.store.update("animes", aid, banner_file_id=fid)
+        await log_event(c, "📝 ᴀɴɪᴍᴇ ᴜᴘᴅᴀᴛᴇᴅ", f"Anime: {aid}\nAction: Banner Photo Updated", important=True, uid=uid)
         clear_sess(c, uid)
         await m.reply("✅ <b>Anime banner updated!</b>", parse_mode=PM_HTML)
     elif step == "edit_anime_caption":
         aid = s["data"]["anime_id"]
         cap = m.text or m.caption or ""
         await c.store.update("animes", aid, banner_caption=cap)
+        await log_event(c, "📝 ᴀɴɪᴍᴇ ᴜᴘᴅᴀᴛᴇᴅ", f"Anime: {aid}\nAction: Caption/Description Updated", important=True, uid=uid)
         clear_sess(c, uid)
         await m.reply("✅ <b>Anime caption updated!</b>", parse_mode=PM_HTML)
     elif step == "edit_season_banner":
@@ -2956,6 +3002,7 @@ async def route_session(c, m, s):
             s_dict["banner_file_id"] = fid
             s_dict["updated_at"] = now()
             await c.store.update("animes", aid, seasons=seasons)
+        await log_event(c, "📝 ꜱᴇᴀꜱᴏɴ ᴜᴘᴅᴀᴛᴇᴅ", f"Anime: {aid}\nSeason: {sn}\nAction: Season Banner Updated", important=True, uid=uid)
         clear_sess(c, uid)
         await m.reply(f"✅ <b>Season {sn} banner updated!</b>", parse_mode=PM_HTML)
     elif step == "edit_season_caption":
@@ -2968,6 +3015,7 @@ async def route_session(c, m, s):
             s_dict["banner_caption"] = cap
             s_dict["updated_at"] = now()
             await c.store.update("animes", aid, seasons=seasons)
+        await log_event(c, "📝 ꜱᴇᴀꜱᴏɴ ᴜᴘᴅᴀᴛᴇᴅ", f"Anime: {aid}\nSeason: {sn}\nAction: Season Caption Updated", important=True, uid=uid)
         clear_sess(c, uid)
         await m.reply(f"✅ <b>Season {sn} caption updated!</b>", parse_mode=PM_HTML)
     elif step == "usr_search_anime" and m.text:
@@ -3026,6 +3074,15 @@ async def route_session(c, m, s):
         await fs_got_channel(c, m, "private")
     elif step == "fs_logch" and m.text:
         await fs_got_logch(c, m)
+    elif step == "log_set" and m.text:
+        chat = await validate_channel(c, m.text.strip())
+        if not chat:
+            await m.reply("❌ Bot is not admin / cannot access channel. Send again or /cancel", parse_mode=PM_HTML)
+            return
+        await set_cfg(c.store, log_channel=chat.id)
+        clear_sess(c, uid)
+        await m.reply(f"🧾 <b>Log Channel Set!</b>\n\n📥 <code>{chat.id}</code>", parse_mode=PM_HTML)
+        await log_event(c, "🧾 ʟᴏɢ ᴄʜᴀɴɴᴇʟ ꜱᴇᴛ", f"{chat.id}", important=True)
     elif step == "status_season" and m.text:
         txt = m.text.strip()
         if not txt.isdigit():
@@ -3041,6 +3098,7 @@ async def route_session(c, m, s):
             await c.store.update("animes", aid, seasons=seasons)
         clear_sess(c, uid)
         st_text = "Season Ended 🏁" if st == "seasonend" else "Coming Soon 🔔"
+        await log_event(c, "📝 ꜱᴇᴀꜱᴏɴ ꜱᴛᴀᴛᴜꜱ ᴜᴘᴅᴀᴛᴇᴅ", f"Anime: {aid}\nSeason: {sn}\nStatus: {st_text}", important=True, uid=uid)
         await m.reply(f"✅ <b>Season {sn} marked as {st_text}!</b>", parse_mode=PM_HTML)
     elif step == "ga_target" and m.text:
         t, name = msg_target(m)
@@ -3235,6 +3293,7 @@ async def launch_clone(meta):
     RUNNING[bid] = c
     if FACTORY:
         await FACTORY.update("bots", bid, last_active=now(), username=me.username or meta.get("username", str(bid)))
+    await log_event(c, "🚀 ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ", f"Bot @{me.username} ({bid}) live", important=True)
     LOG.info("🟢 Clone Live: @%s (%s)", me.username, bid)
     return c
 
@@ -3300,6 +3359,7 @@ async def main():
     RUNNING[me.id] = fc
     register_provider_handlers(fc, is_factory=True)
     await apply_commands(fc)
+    await log_event(fc, "🚀 ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ", f"Factory Bot @{me.username} ({me.id}) live", important=True)
     LOG.info("🟢 Factory Live: @%s (%s)", me.username, me.id)
     await dev_log(f"🚀 Factory Started: @{me.username} ({me.id})\n🤖 Restoring clones...")
 
