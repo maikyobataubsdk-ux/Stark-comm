@@ -2290,9 +2290,14 @@ async def cb_upload(c, q, parts):
     uid = q.from_user.id
     if not await perm_ok(c, uid, "upload"):
         await q_safe(q, "❌ NO UPLOAD PERM!"); return
-    act = parts[1]
+    if parts[0] == "up_q":
+        act = "q"
+        q_val = parts[1] if len(parts) > 1 and parts[1] != "default" else None
+    else:
+        act = parts[1] if len(parts) > 1 else ""
+        q_val = parts[2] if len(parts) > 2 and parts[2] != "default" else None
+
     if act == "q":
-        q_val = parts[2] if parts[2] != "default" else None
         s = get_sess(c, uid)
         if not s or "pending_file" not in s["data"]:
             await q_safe(q, "❌ Upload session expired or no video pending!"); return
@@ -3015,7 +3020,7 @@ async def h_callback(c, q):
             await cb_adm_del_menu(c, q, data.split("|"))
         elif data.startswith("adm_list|"):
             await cb_adm_list_menu(c, q, data.split("|"))
-        elif data.startswith("up|"):
+        elif data.startswith("up|") or data.startswith("up_q|"):
             await cb_upload(c, q, data.split("|"))
         elif data.startswith("ed|"):
             await cb_edit(c, q, data.split("|"))

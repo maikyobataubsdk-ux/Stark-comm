@@ -100,6 +100,40 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
         await app.set_cfg(self.store, official_link="https://t.me/CloneChannel")
         self.assertEqual(app.get_official_link(client), "https://t.me/CloneChannel")
 
+    async def test_callback_upload_quality_routing(self):
+        await app.ensure_defaults(self.store)
+        anime = await app.get_or_create_anime(self.store, "Naruto")
+        aid = anime["_id"]
+
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+        client.username = "testbot"
+
+        # Mock admin permissions
+        await self.store.put("admins", 123, {"_id": "123", "role": "owner", "permissions": app.PERMS})
+
+        # Set active upload session with pending_file using actual anime_id
+        app.set_sess(client, 123, "up_video", anime_id=aid, season=1, episode=1, pending_file={
+            "fid": "vid_file_123",
+            "mtype": "video",
+            "caption": "Naruto Ep 1",
+            "tid": None
+        })
+
+        q = MagicMock()
+        q.from_user.id = 123
+        q.data = "up_q|720p"
+        q.answer = AsyncMock()
+        q.message.edit_text = AsyncMock()
+
+        await app.h_callback(client, q)
+
+        # Check that episode was saved with 720p quality
+        ep = await self.store.get("episodes", f"{aid}:1:1")
+        self.assertIsNotNone(ep)
+        self.assertEqual(ep["qualities"].get("720p"), "vid_file_123")
+
     async def test_send_start_content_buttons(self):
         await app.ensure_defaults(self.store)
         await app.set_cfg(self.store, official_link="https://t.me/MyOfficial")
