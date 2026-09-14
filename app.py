@@ -601,13 +601,24 @@ def render_text(template, user, c):
     return (template.replace("{name}", name).replace("{username}", uname)
             .replace("{botname}", hesc(c.username)))
 
+def get_official_link(c):
+    link = cfg(c.store).get("official_link") or c.store.c("settings").get("official_link")
+    if link:
+        return link
+    if FACTORY:
+        link = cfg(FACTORY).get("official_link") or FACTORY.c("settings").get("official_link")
+        if link:
+            return link
+    return "https://t.me"
+
 async def send_start_content(c, chat_id, user, edit_msg=None):
     s = c.store.c("settings").get("start") or {"type": "text", "text": DEFAULT_START}
     text = render_text(s.get("text") or DEFAULT_START, user or {}, c)
-    if c.is_factory:
-        rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")], [btn("🤖 ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ʙᴏᴛ", "cloneme")]]
-    else:
-        rows = [[btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")]]
+    off_link = get_official_link(c)
+    rows = [
+        [ubtn("📢 ᴏꜰꜰɪᴄɪᴀʟ ᴄʜᴀɴɴᴇʟ", off_link), btn("🤖 ᴄʟᴏɴᴇ ʙᴏᴛ", "cloneme")],
+        [btn("📺 ꜱᴇʟᴇᴄᴛ ᴀɴɪᴍᴇ", "usr|anime_list")]
+    ]
 
     c_btns = (c.store.c("settings").get("custom_buttons") or {}).get("list", [])
     for r in c_btns:
@@ -677,7 +688,7 @@ async def resolve_thumb(c, ep):
     except Exception:
         return None
 
-async def save_episode(c, uid, aid, s, e, file_id, mtype, caption, thumb_id):
+async def save_episode(c, uid, aid, s, e, file_id, mtype, caption, thumb_id, quality=None):
     existing = await c.store.get("episodes", ep_id(aid, s, e))
     if existing:
         fids = existing.get("file_ids") or ([existing["file_id"]] if existing.get("file_id") else [])
@@ -685,13 +696,18 @@ async def save_episode(c, uid, aid, s, e, file_id, mtype, caption, thumb_id):
             fids.append(file_id)
         existing["file_ids"] = fids
         existing["file_id"] = fids[0]
+        qualities = existing.get("qualities") or {}
+        if quality:
+            qualities[quality] = file_id
+        existing["qualities"] = qualities
         existing["updated_at"] = now()
         if caption: existing["caption"] = caption
         if thumb_id: existing["thumb_id"] = thumb_id
         await c.store.put("episodes", ep_id(aid, s, e), existing)
         doc = existing
     else:
-        doc = {"_id": ep_id(aid, s, e), "anime_id": aid, "season": s, "episode": e, "file_id": file_id, "file_ids": [file_id], "type": mtype,
+        qualities = {quality: file_id} if quality else {}
+        doc = {"_id": ep_id(aid, s, e), "anime_id": aid, "season": s, "episode": e, "file_id": file_id, "file_ids": [file_id], "qualities": qualities, "type": mtype,
                "caption": caption or "", "thumb_id": thumb_id, "thumb_path": None,
                "uploaded_by": uid, "created_at": now(), "updated_at": now()}
         await c.store.put("episodes", doc["_id"], doc)
@@ -862,22 +878,46 @@ async def show_user_episode_list(c, chat_id, aid, sn, page=1, edit_msg=None):
             pass
     await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
 
-async def send_episode(c, chat_id, aid, s, e, user=None):
+async def send_episode(c, chat_id, aid, s, e, user=None, req_quality=None):
     ep = await c.store.get("episodes", ep_id(aid, s, e))
     if not ep:
         return False
     if user is None:
         user = await c.store.get("users", str(chat_id))
-    caption = build_caption(c, ep, user)
-    kb = InlineKeyboardMarkup([
-        [btn("▶️ ɴᴇxᴛ ᴇᴘɪꜱᴏᴅᴇ ▶️", f"next|{aid}:{s}:{e}")],
-        [btn("🏠 ʙᴀᴄᴋ ᴛᴏ ꜱᴛᴀʀᴛ", "usr|home")]
-    ])
-    thumb = await resolve_thumb(c, ep)
 
-    file_ids = ep.get("file_ids") or ([ep["file_id"]] if ep.get("file_id") else [])
+    chosen_quality = req_quality or (user.get("pref_quality") if user else None)
+    qualities = ep.get("qualities") or {}
+
+    file_ids = []
+    if qualities:
+        if chosen_quality and chosen_quality in qualities:
+            file_ids = [qualities[chosen_quality]]
+        else:
+            for q in [chosen_quality, "720p", "1080p", "480p"]:
+                if q in qualities:
+                    file_ids = [qualities[q]]
+                    chosen_quality = q
+                    break
+            if not file_ids:
+                q_k = list(qualities.keys())[0]
+                file_ids = [qualities[q_k]]
+                chosen_quality = q_k
+    else:
+        file_ids = ep.get("file_ids") or ([ep["file_id"]] if ep.get("file_id") else [])
+
     if not file_ids:
         return False
+
+    caption = build_caption(c, ep, user)
+    if chosen_quality:
+        caption += f"\n\n⚙️ <b>Quality: {chosen_quality}</b>"
+
+    q_param = chosen_quality or "default"
+    kb = InlineKeyboardMarkup([
+        [btn("▶️ ɴᴇxᴛ ᴇᴘɪꜱᴏᴅᴇ ▶️", f"next|{aid}:{s}:{e}|{q_param}")],
+        [btn("⚙️ ᴄʜᴀɴɢᴇ Qᴜᴀʟɪᴛʏ", f"usr|ep_q_menu|{aid}|{s}|{e}"), btn("🏠 ʙᴀᴄᴋ ᴛᴏ ꜱᴛᴀʀᴛ", "usr|home")]
+    ])
+    thumb = await resolve_thumb(c, ep)
 
     total_files = len(file_ids)
     for idx, fid in enumerate(file_ids):
@@ -916,7 +956,10 @@ async def cmd_start(c, m):
     uid = m.from_user.id
     user = await ensure_user(c, m.from_user)
     payload = m.command[1] if len(m.command) > 1 else ""
-    if payload.startswith("ref_"):
+    if payload.startswith("anime_"):
+        aid = payload[6:]
+        await c.store.update("users", str(uid), pending_anime=aid)
+    elif payload.startswith("ref_"):
         ref = payload[4:]
         if ref.isdigit() and int(ref) != uid:
             rid = f"{int(ref)}_{uid}"
@@ -934,6 +977,12 @@ async def cmd_start(c, m):
             pass
         return
     await convert_referral(c, uid)
+    user_doc = await c.store.get("users", str(uid)) or user
+    pending_anime = user_doc.get("pending_anime") if user_doc else None
+    if pending_anime:
+        await c.store.update("users", str(uid), pending_anime=None)
+        await show_user_season_list(c, m.chat.id, pending_anime)
+        return
     await send_start_content(c, m.chat.id, user)
 
 async def episode_request(c, m):
@@ -1174,17 +1223,14 @@ async def up_got_video(c, m):
     anime = await c.store.get("animes", aid)
     title = anime.get("title", "Anime") if anime else "Anime"
 
-    await save_episode(c, uid, aid, sn, en, fid, mtype, m.caption or "", tid)
-    d["added"] = d.get("added", 0) + 1
-    d["episode"] = en + 1
+    d["pending_file"] = {"fid": fid, "mtype": mtype, "caption": m.caption or "", "tid": tid}
 
     kb = InlineKeyboardMarkup([
-        [btn("🏁 Mark Season Ended", f"up_st|seasonend|{aid}|{sn}"), btn("🔔 Mark Coming Soon", f"up_st|coming|{aid}|{sn}")],
-        [btn("➕ More Episodes Coming", f"up_st|more_episodes|{aid}|{sn}")],
-        [btn("🏁 Finish Upload (/done)", "up|done")]
+        [btn("📱 480p", "up_q|480p"), btn("🎬 720p", "up_q|720p"), btn("🖥️ 1080p", "up_q|1080p")],
+        [btn("⚙️ Default / Auto", "up_q|default")]
     ])
 
-    await m.reply(f"✅ <b>{hesc(title)} — S{sn} E{en} Added!</b>\n\n📤 Send next video for Episode {en + 1} or select season status below:",
+    await m.reply(f"📹 <b>{hesc(title)} — S{sn} E{en} Video Received!</b>\n\n👇 <b>Select Quality for this upload:</b>",
                   reply_markup=kb, parse_mode=PM_HTML)
 
 async def ns_got_season(c, m):
@@ -1214,21 +1260,14 @@ async def ns_got_video(c, m):
     anime = await c.store.get("animes", aid)
     title = anime.get("title", "Anime") if anime else "Anime"
 
-    if await c.store.get("episodes", ep_id(aid, sn, en)):
-        await m.reply(f"⚠️ S{sn} E{en} already exists — skipped!", parse_mode=PM_HTML)
-        d["episode"] = en + 1
-        return
-    await save_episode(c, uid, aid, sn, en, fid, mtype, m.caption or "", tid)
-    d["episode"] = en + 1
-    d["added"] = d.get("added", 0) + 1
+    d["pending_file"] = {"fid": fid, "mtype": mtype, "caption": m.caption or "", "tid": tid}
 
     kb = InlineKeyboardMarkup([
-        [btn("🏁 Mark Season Ended", f"up_st|seasonend|{aid}|{sn}"), btn("🔔 Mark Coming Soon", f"up_st|coming|{aid}|{sn}")],
-        [btn("➕ More Episodes Coming", f"up_st|more_episodes|{aid}|{sn}")],
-        [btn("🏁 Finish Upload (/done)", "up|done")]
+        [btn("📱 480p", "up_q|480p"), btn("🎬 720p", "up_q|720p"), btn("🖥️ 1080p", "up_q|1080p")],
+        [btn("⚙️ Default / Auto", "up_q|default")]
     ])
 
-    await m.reply(f"✅ <b>{hesc(title)} — S{sn} E{en} Added!</b>\n\n📤 Send next video for Episode {en + 1} or select season status below:",
+    await m.reply(f"📹 <b>{hesc(title)} — S{sn} E{en} Video Received!</b>\n\n👇 <b>Select Quality for this upload:</b>",
                   reply_markup=kb, parse_mode=PM_HTML)
 
 async def cmd_done(c, m):
@@ -1805,8 +1844,8 @@ def admin_panel_kb():
         [btn("🟢 Upload", "pan|upload"), btn("🔵 Edit", "pan|edit"), btn("🔴 Delete", "pan|del")],
         [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "adm_list|menu")],
         [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")],
-        [btn("🧾 Log Channel", "pan|logch"), btn("🚫 Ban User", "pan|banuser"), btn("🟢 Unban User", "pan|unbanuser")],
-        [btn("🔗 Custom Buttons", "pan|cbtn"), btn("🧹 Clear Database", "pan|cleardb")]])
+        [btn("🧾 Log Channel", "pan|logch"), btn("📢 Official Link", "pan|set_offlink"), btn("🚫 Ban User", "pan|banuser")],
+        [btn("🔗 Anime Links", "pan|anlinks"), btn("🔗 Custom Buttons", "pan|cbtn"), btn("🧹 Clear Database", "pan|cleardb")]])
 
 def log_panel_kb():
     return InlineKeyboardMarkup([
@@ -2071,7 +2110,6 @@ async def es_got(c, m):
 
 # ─────────── ᴄʟᴏɴᴇ ꜰᴀᴄᴛᴏʀʏ ───────────
 async def cmd_clone(c, m):
-    if not c.is_factory: return
     uid = m.from_user.id
     ok, fs_kb = await fs_state(c, uid)
     if not ok:
@@ -2213,9 +2251,10 @@ async def restart_all(status_msg, only=None):
 
 async def supreme_panel_kb():
     return InlineKeyboardMarkup([
-        [btn("🤖 Manage Bots", "sv|manage_bots"), btn("🗄️ Database Insights", "sv|db")],
-        [btn("📊 Global Stats", "sv|stats"), btn("♻️ Restart Clones", "sv|restart")],
-        [btn("🔐 Clone ForceSub", "sv|setfs"), btn("📣 Global Broadcast", "sv|bc_all")]])
+        [btn("📢 Official Channel Link", "sv|set_offlink"), btn("🤖 Manage Bots", "sv|manage_bots")],
+        [btn("🗄️ Database Insights", "sv|db"), btn("📊 Global Stats", "sv|stats")],
+        [btn("♻️ Restart Clones", "sv|restart"), btn("🔐 Clone ForceSub", "sv|setfs")],
+        [btn("📣 Global Broadcast", "sv|bc_all")]])
 
 async def cmd_supreme(c, m):
     if not is_supreme(m.from_user.id): return
@@ -2252,7 +2291,58 @@ async def cb_upload(c, q, parts):
     if not await perm_ok(c, uid, "upload"):
         await q_safe(q, "❌ NO UPLOAD PERM!"); return
     act = parts[1]
-    if act == "add_anime":
+    if act == "q":
+        q_val = parts[2] if parts[2] != "default" else None
+        s = get_sess(c, uid)
+        if not s or "pending_file" not in s["data"]:
+            await q_safe(q, "❌ Upload session expired or no video pending!"); return
+        d = s["data"]
+        aid, sn, en = d["anime_id"], d["season"], d["episode"]
+        pf = d.pop("pending_file")
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+
+        await save_episode(c, uid, aid, sn, en, pf["fid"], pf["mtype"], pf["caption"], pf["tid"], quality=q_val)
+        d["added"] = d.get("added", 0) + 1
+        d["episode"] = en + 1
+
+        q_str = f" ({q_val})" if q_val else ""
+        await q_safe(q, f"✅ Saved S{sn} E{en}{q_str}")
+
+        kb = InlineKeyboardMarkup([
+            [btn(f"➕ Add Another Quality for S{sn} E{en}", f"up|same_ep|{aid}|{sn}|{en}"), btn(f"▶️ Next Ep (E{en + 1})", f"up|next_ep|{aid}|{sn}|{en + 1}")],
+            [btn("🏁 Mark Season Ended", f"up_st|seasonend|{aid}|{sn}"), btn("🔔 Mark Coming Soon", f"up_st|coming|{aid}|{sn}")],
+            [btn("➕ More Episodes Coming", f"up_st|more_episodes|{aid}|{sn}")],
+            [btn("🏁 Finish Upload (/done)", "up|done")]
+        ])
+
+        try:
+            await q.message.edit_text(f"✅ <b>{hesc(title)} — S{sn} E{en}{q_str} Added!</b>\n\n📤 Send video for Episode {en + 1} or select an option below:",
+                                     reply_markup=kb, parse_mode=PM_HTML)
+        except RPCError:
+            pass
+        return
+    elif act == "same_ep":
+        aid, sn, en = parts[2], int(parts[3]), int(parts[4])
+        s = get_sess(c, uid)
+        if s: s["data"]["episode"] = en
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        await q_safe(q, f"📤 Send video for S{sn} E{en}")
+        try: await q.message.edit_text(f"📤 <b>Send video for another quality of {hesc(title)} — Season {sn} Episode {en}:</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
+    elif act == "next_ep":
+        aid, sn, next_en = parts[2], int(parts[3]), int(parts[4])
+        s = get_sess(c, uid)
+        if s: s["data"]["episode"] = next_en
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        await q_safe(q, f"📤 Send video for S{sn} E{next_en}")
+        try: await q.message.edit_text(f"📤 <b>Send video for {hesc(title)} — Season {sn} Episode {next_en}:</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
+    elif act == "add_anime":
         set_sess(c, uid, "up_new_anime_name")
         await q_safe(q, "📝 Send Anime Name")
         try: await q.message.edit_text("📝 <b>Send the name of the new anime:</b>\n\n❌ /cancel", parse_mode=PM_HTML)
@@ -2397,6 +2487,38 @@ async def cb_panel(c, q, parts):
         await q_safe(q, "👥"); await show_admins_list(c, None, edit_msg=q.message)
     elif act == "logch":
         await q_safe(q, "🧾 Log Channel"); await show_log_panel(c, None, edit_msg=q.message)
+    elif act == "set_offlink":
+        set_sess(c, uid, "pan_offlink_input")
+        await q_safe(q, "📢 Send Official Link")
+        try: await q.message.edit_text("📢 <b>Send your bot's Official Channel Link (URL):</b>\n\nExample: <code>https://t.me/YourChannel</code>", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "anlinks":
+        await q_safe(q, "🔗 Anime Links")
+        animes = c.store.find("animes")
+        animes.sort(key=lambda x: x.get("title", "").lower())
+        rows = []
+        for a in animes:
+            rows.append([btn(a.get("title", "Anime")[:24], f"pan|gen_anlink|{a['_id']}")])
+        rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|refresh")])
+        txt = "🔗 <b>ANIME REFERRAL LINKS GENERATOR</b>\n━━━━━━━━━━━━━━\nSelect an anime below to get its unique share link:"
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "gen_anlink":
+        aid = parts[2]
+        anime = await c.store.get("animes", aid)
+        title = anime.get("title", "Anime") if anime else "Anime"
+        link = f"https://t.me/{c.username}?start=anime_{aid}"
+        await q_safe(q, "🔗 Link Generated!")
+        txt = (f"🔗 <b>UNIQUE ANIME LINK GENERATED!</b>\n━━━━━━━━━━━━━━\n"
+               f"📺 Anime: <b>{hesc(title)}</b>\n\n"
+               f"🚀 <b>Shareable Link:</b>\n<code>{link}</code>\n\n"
+               f"💡 <i>When users click this link, they will be prompted to join ForceSub (if enabled) and then taken directly to {hesc(title)}!</i>")
+        kb = InlineKeyboardMarkup([
+            [ubtn("🟢 SHARE LINK", f"https://t.me/share/url?url={quote(link)}&text={quote('🎬 Watch ' + title)}")],
+            [btn("🔙 BACK TO ANIME LIST", "pan|anlinks")]
+        ])
+        try: await q.message.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
+        except RPCError: pass
     elif act == "cbtn":
         await q_safe(q, "🔗 Custom Buttons")
         c_btns = (c.store.c("settings").get("custom_buttons") or {}).get("list", [])
@@ -2697,6 +2819,11 @@ async def cb_supreme(c, q, parts):
     elif act == "restart":
         await q_safe(q, "♻️ Restarting...")
         await restart_all(q.message)
+    elif act == "set_offlink":
+        set_sess(c, q.from_user.id, "sv_offlink_input")
+        await q_safe(q, "📢 Send Official Link")
+        try: await q.message.edit_text("📢 <b>Send Global Official Channel Link (URL):</b>\n\nExample: <code>https://t.me/YourOfficialChannel</code>", parse_mode=PM_HTML)
+        except RPCError: pass
     elif act == "setfs":
         await q_safe(q, "🔐 Force Sub")
         await show_fs_panel(c, None, edit_msg=q.message)
@@ -2725,7 +2852,13 @@ async def h_callback(c, q):
                 await convert_referral(c, uid)
                 try: await q.message.delete()
                 except RPCError: pass
-                await send_start_content(c, uid, user)
+                user_doc = await c.store.get("users", str(uid))
+                pending_anime = user_doc.get("pending_anime") if user_doc else None
+                if pending_anime:
+                    await c.store.update("users", str(uid), pending_anime=None)
+                    await show_user_season_list(c, uid, pending_anime)
+                else:
+                    await send_start_content(c, uid, user)
             else:
                 await unauthorized(c, uid)
                 await q_safe(q, "❌ Still not verified — join channel first!")
@@ -2756,19 +2889,44 @@ async def h_callback(c, q):
             page = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 1
             await q_safe(q, f"🎬 Season {sn}")
             await show_user_episode_list(c, uid, aid, sn, page=page, edit_msg=q.message)
-        elif data.startswith("usr|ep|"):
+        elif data.startswith("usr|ep|") or data.startswith("usr|ep_q_menu|"):
             parts = data.split("|")
             aid, sn, en = parts[2], int(parts[3]), int(parts[4])
-            await q_safe(q, "▶️ Loading Episode...")
-            user = await c.store.get("users", uid)
-            await send_episode(c, uid, aid, sn, en, user)
+            ep = await c.store.get("episodes", ep_id(aid, sn, en))
+            qualities = ep.get("qualities") or {} if ep else {}
+            if qualities:
+                await q_safe(q, "🎬 Select Quality")
+                anime = await c.store.get("animes", aid)
+                title = anime.get("title", "Anime") if anime else "Anime"
+                avail = [q_k for q_k in ["480p", "720p", "1080p"] if q_k in qualities] or list(qualities.keys())
+                q_btns = [btn(f"🎬 {q_k}", f"usr|ep_q|{aid}|{sn}|{en}|{q_k}") for q_k in avail]
+                rows = [q_btns, [btn("🔙 ʙᴀᴄᴋ", f"usr|season|{aid}|{sn}")]]
+                txt = f"📺 <b>{hesc(title)} • S{sn} E{en}</b>\n━━━━━━━━━━━━━━\n👇 <b>Select Quality / Quality Chunein:</b>"
+                kb = InlineKeyboardMarkup(rows)
+                try: await q.message.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+                except RPCError:
+                    try: await c.send_message(uid, txt, reply_markup=kb, parse_mode=PM_HTML)
+                    except RPCError: pass
+            else:
+                await q_safe(q, "▶️ Loading Episode...")
+                user = await c.store.get("users", uid)
+                await send_episode(c, uid, aid, sn, en, user)
+        elif data.startswith("usr|ep_q|"):
+            parts = data.split("|")
+            aid, sn, en, q_val = parts[2], int(parts[3]), int(parts[4]), parts[5]
+            await c.store.update("users", str(uid), pref_quality=q_val)
+            await q_safe(q, f"▶️ Loading S{sn} E{en} ({q_val})...")
+            user = await c.store.get("users", str(uid))
+            await send_episode(c, uid, aid, sn, en, user, req_quality=q_val)
         elif data.startswith("next|"):
             await q_safe(q, "▶️ Loading Next...")
-            parts = data.split("|")[1].split(":")
-            aid = parts[0]
-            s, e = int(parts[1]), int(parts[2])
+            parts = data.split("|")
+            ep_info = parts[1].split(":")
+            aid = ep_info[0]
+            s, e = int(ep_info[1]), int(ep_info[2])
+            req_q = parts[2] if len(parts) > 2 and parts[2] != "default" else None
             user = await c.store.get("users", uid)
-            found = await send_episode(c, uid, aid, s, e + 1, user)
+            found = await send_episode(c, uid, aid, s, e + 1, user, req_quality=req_q)
             if not found:
                 anime = await c.store.get("animes", aid)
                 st_map = (anime or {}).get("seasons", {})
@@ -2809,7 +2967,6 @@ async def h_callback(c, q):
             try: await q.message.reply(ranking_text(c.store), parse_mode=PM_HTML)
             except RPCError: pass
         elif data == "cloneme":
-            if not c.is_factory: return
             ok, fs_kb = await fs_state(c, uid)
             if not ok:
                 await unauthorized(c, uid)
@@ -2885,7 +3042,23 @@ async def h_callback(c, q):
 async def route_session(c, m, s):
     uid = m.from_user.id
     step = s.get("step")
-    if step == "cbtn_add_1" and m.text:
+    if step == "sv_offlink_input" and m.text:
+        link = m.text.strip()
+        if not link.startswith("http"):
+            await m.reply("❌ Send a valid URL starting with http:// or https://", parse_mode=PM_HTML); return
+        await set_cfg(FACTORY, official_link=link)
+        await FACTORY.put("settings", "official_link", link)
+        clear_sess(c, uid)
+        await m.reply(f"✅ <b>Global Official Channel Link updated!</b>\n\n📢 <code>{link}</code>", parse_mode=PM_HTML)
+    elif step == "pan_offlink_input" and m.text:
+        link = m.text.strip()
+        if not link.startswith("http"):
+            await m.reply("❌ Send a valid URL starting with http:// or https://", parse_mode=PM_HTML); return
+        await set_cfg(c.store, official_link=link)
+        await c.store.put("settings", "official_link", link)
+        clear_sess(c, uid)
+        await m.reply(f"✅ <b>Bot Official Channel Link updated!</b>\n\n📢 <code>{link}</code>", parse_mode=PM_HTML)
+    elif step == "cbtn_add_1" and m.text:
         parts = [x.strip() for x in m.text.split("|") if x.strip()]
         if len(parts) < 2 or not parts[1].startswith("http"):
             await m.reply("❌ <b>Invalid format!</b> Use: <code>Text | https://link.com</code>", parse_mode=PM_HTML); return
