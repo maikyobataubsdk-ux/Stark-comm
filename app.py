@@ -552,37 +552,82 @@ async def ensure_user(c, tu):
     await touch_active(c)
     return u
 
-async def fs_state(c, uid):
-    """Returns (ok, keyboard|None)."""
-    st = cfg(c.store)
-    mode = st.get("fs_mode", "off")
-    if mode == "off": return True, None
-    if is_supreme(uid): return True, None
-    a = await c.store.get("admins", uid)
-    if a or st.get("owner_id") == uid: return True, None
-    u = await c.store.get("users", uid)
-    if mode == "public":
-        ok = False
-        try:
-            mem = await c.get_chat_member(st.get("fs_channel"), uid)
-            ok = mem.status in (CMS.MEMBER, CMS.ADMINISTRATOR, CMS.OWNER)
-        except UserNotParticipant:
-            ok = False
-        except RPCError:
-            ok = False
-        if ok:
-            if u: await c.store.update("users", uid, fs_verified=True)
+async def fs_state(c, uid, is_clone_action=False):
+    """Returns (ok, keyboard|None).
+       If is_clone_action=True, checks Factory/Supreme ForceSub channels exclusively."""
+    if is_supreme(uid):
+        return True, None
+
+    # Determine which channels to check
+    if is_clone_action:
+        target_store = FACTORY or c.store
+        target_client = FACTORY_CLIENT or c
+    else:
+        target_store = c.store
+        target_client = c
+        a = await c.store.get("admins", uid)
+        if a or cfg(c.store).get("owner_id") == uid:
             return True, None
-        if not st.get("fs_username"): return True, None
-        kb = InlineKeyboardMarkup([[ubtn("🔗 ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ", f"https://t.me/{st['fs_username']}")],
-                                   [btn("✅ ᴠᴇʀɪꜰʏ ɴᴏᴡ", "ckfs")]])
-        return False, kb
-    # private request mode
-    if u and u.get("fs_verified"): return True, None
-    if not st.get("fs_link"): return True, None
-    kb = InlineKeyboardMarkup([[ubtn("🔗 ʀᴇQᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ", st["fs_link"])],
-                               [btn("✅ ᴠᴇʀɪꜰʏ ɴᴏᴡ", "ckfs")]])
-    return False, kb
+
+    st = cfg(target_store)
+    channels = st.get("fs_channels", [])
+    if not channels:
+        # Backward compatibility single channel fallback
+        mode = st.get("fs_mode", "off")
+        if mode != "off":
+            channels = [{
+                "mode": mode,
+                "chat_id": st.get("fs_channel"),
+                "username": st.get("fs_username", ""),
+                "link": st.get("fs_link", "")
+            }]
+
+    if not channels:
+        return True, None
+
+    u = await target_store.get("users", uid)
+    verified_chats = set((u.get("fs_verified_chats") or []) if u else [])
+    if u and u.get("fs_verified"):
+        # Legacy all-verified check
+        verified_chats.update(str(ch.get("chat_id")) for ch in channels if ch.get("chat_id"))
+
+    unsub_rows = []
+    all_ok = True
+
+    for ch in channels:
+        cid = ch.get("chat_id")
+        cid_str = str(cid)
+        cmode = ch.get("mode", "public")
+        cuname = ch.get("username", "")
+        clink = ch.get("link", "")
+
+        is_joined = False
+        if cmode == "public" and (cid or cuname):
+            try:
+                mem = await target_client.get_chat_member(cuname or cid, uid)
+                is_joined = mem.status in (CMS.MEMBER, CMS.ADMINISTRATOR, CMS.OWNER)
+            except (UserNotParticipant, RPCError):
+                is_joined = False
+        else:
+            if cid_str in verified_chats or (u and u.get("fs_verified")):
+                is_joined = True
+
+        if is_joined:
+            verified_chats.add(cid_str)
+        else:
+            all_ok = False
+            label = f"🔗 ᴊᴏɪɴ @{cuname}" if cuname else "🔗 ʀᴇQᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ"
+            url = f"https://t.me/{cuname}" if (cmode == "public" and cuname) else clink
+            if url:
+                unsub_rows.append([ubtn(label, url)])
+
+    if all_ok:
+        if u:
+            await target_store.update("users", uid, fs_verified=True, fs_verified_chats=list(verified_chats))
+        return True, None
+
+    unsub_rows.append([btn("✅ ᴠᴇʀɪꜰʏ ɴᴏᴡ", "ckfs")])
+    return False, InlineKeyboardMarkup(unsub_rows)
 
 async def convert_referral(c, uid):
     pend = [r for r in c.store.find("referrals")
@@ -857,8 +902,12 @@ async def show_user_episode_list(c, chat_id, aid, sn, page=1, edit_msg=None):
         try:
             if s_banner_fid:
                 if edit_msg.photo or edit_msg.caption is not None:
-                    await edit_msg.edit_caption(caption=txt, reply_markup=kb, parse_mode=PM_HTML)
-                    return
+                    try:
+                        from pyrogram.types import InputMediaPhoto
+                        await edit_msg.edit_media(media=InputMediaPhoto(s_banner_fid, caption=txt, parse_mode=PM_HTML), reply_markup=kb)
+                        return
+                    except Exception:
+                        await edit_msg.delete()
                 else:
                     await edit_msg.delete()
             else:
@@ -2019,7 +2068,10 @@ async def show_ban_panel(c, chat_id, edit_msg=None):
 
     txt = (f"🚫 <b>ʙᴀɴ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ ᴘᴀɴᴇʟ</b>\n━━━━━━━━━━━━━━\n"
            f"👥 Total Banned Users: <b>{len(banned_users)}</b>\n\n"
-           f"Select an option or tap on a banned user to unban:")
+           f"💡 <b>Instructions:</b>\n"
+           f"▸ To ban a user, send: <code>/ban &lt;userID&gt;</code>\n"
+           f"▸ To unban a user, send: <code>/unban &lt;userID&gt;</code>\n\n"
+           f"Select an option below or tap on a banned user to unban:")
     kb = InlineKeyboardMarkup(rows)
     if edit_msg is not None:
         try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
@@ -2035,12 +2087,12 @@ async def cb_ban_ui(c, q, parts):
     if act == "ban_prompt":
         set_sess(c, uid, "ban_target")
         await q_safe(q, "🚫 Send User ID")
-        try: await q.message.edit_text("🚫 <b>Send User ID to ban:</b>\n\n(or send /cancel)", parse_mode=PM_HTML)
+        try: await q.message.edit_text("🚫 <b>Send User ID to ban:</b>\n\n💡 Example: Send <code>123456789</code> or use <code>/ban 123456789</code>\n\n(or send /cancel)", parse_mode=PM_HTML)
         except RPCError: pass
     elif act == "unban_prompt":
         set_sess(c, uid, "unban_target")
         await q_safe(q, "🟢 Send User ID")
-        try: await q.message.edit_text("🟢 <b>Send User ID to unban:</b>\n\n(or send /cancel)", parse_mode=PM_HTML)
+        try: await q.message.edit_text("🟢 <b>Send User ID to unban:</b>\n\n💡 Example: Send <code>123456789</code> or use <code>/unban 123456789</code>\n\n(or send /cancel)", parse_mode=PM_HTML)
         except RPCError: pass
     elif act == "do_unban":
         t_str = parts[2]
@@ -2069,25 +2121,47 @@ async def show_admins_list(c, chat_id, edit_msg=None):
         await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
 
 # ─────────── ꜰᴏʀᴄᴇ-ꜱᴜʙ & ꜱᴇᴛᴛɪɴɢꜱ ───────────
-def fs_panel_kb():
-    return InlineKeyboardMarkup([
-        [btn("🟢 Public Channel", "fs|public"), btn("🔵 Private Request", "fs|private")],
-        [btn("🔴 Disable", "fs|off"), btn("🧾 Log Channel", "fs|logch")]])
+def fs_panel_kb(channels):
+    rows = [
+        [btn("🟢 Add Public Channel", "fs|public"), btn("🔵 Add Private Request", "fs|private")],
+        [btn("🔴 Clear All Channels", "fs|off"), btn("🧾 Log Channel", "fs|logch")]
+    ]
+    for idx, ch in enumerate(channels[:10]):
+        cname = f"@{ch.get('username')}" if ch.get("username") else f"ID: {ch.get('chat_id')}"
+        mode_str = "🟢 Pub" if ch.get("mode") == "public" else "🔵 Priv"
+        rows.append([btn(f"🗑️ Remove #{idx+1} {mode_str} {cname[:16]}", f"fs|rm|{idx}")])
+    rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|refresh")])
+    return InlineKeyboardMarkup(rows)
 
 async def show_fs_panel(c, chat_id, edit_msg=None):
     st = cfg(c.store)
-    mode = st.get("fs_mode", "off")
-    mtxt = {"off": "🔴 OFF", "public": "🟢 PUBLIC", "private": "🔵 PRIVATE REQUEST"}.get(mode, mode)
-    ch = f"@{st['fs_username']}" if st.get("fs_username") else (st.get("fs_channel") or "—")
-    txt = (f"🔐 <b>ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ</b>\n━━━━━━━━━━━━━━\n"
-           f"📊 Status: <b>{mtxt}</b>\n📢 Channel: <code>{ch}</code>\n"
-           f"🧾 Log Ch: <code>{st.get('log_channel') or '—'}</code>\n\n"
-           "🟢 Public = Membership Check\n🔵 Private = Join Request Auto-Approve")
+    channels = st.get("fs_channels", [])
+    if not channels and st.get("fs_mode") != "off" and st.get("fs_channel"):
+        channels = [{
+            "mode": st.get("fs_mode", "public"),
+            "chat_id": st.get("fs_channel"),
+            "username": st.get("fs_username", ""),
+            "link": st.get("fs_link", "")
+        }]
+
+    lines = [f"🔐 <b>ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ (Max 10 Channels)</b>", "━━━━━━━━━━━━━━"]
+    if not channels:
+        lines.append(" Status: <b>🔴 OFF (No channels added)</b>")
+    else:
+        lines.append(f"📊 Configured Channels: <b>{len(channels)} / 10</b>\n")
+        for idx, ch in enumerate(channels):
+            cmode = "🟢 Public" if ch.get("mode") == "public" else "🔵 Private Request"
+            cuname = f"@{ch.get('username')}" if ch.get("username") else f"ID: {ch.get('chat_id')}"
+            lines.append(f"{idx+1}. {cmode} — <code>{cuname}</code>")
+
+    lines.append("\n💡 <i>You can add up to 10 channels. Supreme Panel /setfs forces clone creation subscription!</i>")
+    txt = "\n".join(lines)
+    kb = fs_panel_kb(channels)
     if edit_msg is not None:
-        try: await edit_msg.edit_text(txt, reply_markup=fs_panel_kb(), parse_mode=PM_HTML)
+        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
         except RPCError: pass
     else:
-        await c.send_message(chat_id, txt, reply_markup=fs_panel_kb(), parse_mode=PM_HTML)
+        await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
 
 async def cmd_setfs(c, m):
     if not await perm_ok(c, m.from_user.id, "forcesub"):
@@ -2143,11 +2217,27 @@ async def fs_got_channel(c, m, mode):
         await m.reply("❌ <b>CAN'T ACCESS CHANNEL!</b> (Bot must be admin)\nSend again or /cancel", parse_mode=PM_HTML)
         return
     store = c.store
+    st = cfg(store)
+    channels = list(st.get("fs_channels", []))
+
+    if len(channels) >= 10:
+        await m.reply("❌ <b>MAXIMUM 10 CHANNELS REACHED!</b>\n\nRemove existing channels from ForceSub panel first.", parse_mode=PM_HTML)
+        clear_sess(c, m.from_user.id)
+        return
+
+    # Check for duplicates
+    if any(str(ch.get("chat_id")) == str(chat.id) for ch in channels):
+        await m.reply("⚠️ <b>This channel is already added to ForceSub!</b>", parse_mode=PM_HTML)
+        clear_sess(c, m.from_user.id)
+        return
+
     if mode == "public":
         if not chat.username:
             await m.reply("❌ This is a private channel — use 🔵 Private Mode.", parse_mode=PM_HTML); return
-        await set_cfg(store, fs_mode="public", fs_channel=chat.id, fs_username=chat.username)
-        await m.reply(f"✅ <b>Public ForceSub ON!</b>\n\n📢 @{chat.username}", parse_mode=PM_HTML)
+        ch_entry = {"mode": "public", "chat_id": chat.id, "username": chat.username, "link": f"https://t.me/{chat.username}"}
+        channels.append(ch_entry)
+        await set_cfg(store, fs_channels=channels, fs_mode="public", fs_channel=chat.id, fs_username=chat.username)
+        await m.reply(f"✅ <b>Public ForceSub Channel Added! ({len(channels)}/10)</b>\n\n📢 @{chat.username}", parse_mode=PM_HTML)
     else:
         link_str = None
         try:
@@ -2164,10 +2254,11 @@ async def fs_got_channel(c, m, mode):
                     link_str = getattr(chat, "invite_link", None)
         if not link_str:
             await m.reply("❌ Invite link creation failed — give bot invite permission.", parse_mode=PM_HTML); return
-        await set_cfg(store, fs_mode="private", fs_channel=chat.id, fs_link=link_str,
-                      fs_username=chat.username or "")
-        await m.reply(f"✅ <b>Private Request ForceSub ON!</b>\n\n🔗 Link Ready — Join requests will auto-approve.", parse_mode=PM_HTML)
-    await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", f"Mode: {mode} | Chat: {chat.id}", important=True)
+        ch_entry = {"mode": "private", "chat_id": chat.id, "username": chat.username or "", "link": link_str}
+        channels.append(ch_entry)
+        await set_cfg(store, fs_channels=channels, fs_mode="private", fs_channel=chat.id, fs_link=link_str, fs_username=chat.username or "")
+        await m.reply(f"✅ <b>Private Request ForceSub Channel Added! ({len(channels)}/10)</b>\n\n🔗 Link Ready — Join requests will auto-approve.", parse_mode=PM_HTML)
+    await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", f"Mode: {mode} | Chat: {chat.id} (Total: {len(channels)})", important=True)
     clear_sess(c, m.from_user.id)
 
 async def fs_got_logch(c, m):
@@ -2214,7 +2305,7 @@ async def es_got(c, m):
 # ─────────── ᴄʟᴏɴᴇ ꜰᴀᴄᴛᴏʀʏ ───────────
 async def cmd_clone(c, m):
     uid = m.from_user.id
-    ok, fs_kb = await fs_state(c, uid)
+    ok, fs_kb = await fs_state(c, uid, is_clone_action=True)
     if not ok:
         await unauthorized(c, uid)
         try:
@@ -2237,9 +2328,18 @@ async def clone_token(c, m):
     if not re.match(r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", tok):
         await m.reply("❌ Invalid token format — send again or /cancel"); return
     pre = int(tok.split(":", 1)[0])
-    if FACTORY.get_sync("bots", pre) or (FACTORY_CLIENT and pre == FACTORY_CLIENT.bot_id):
+    existing_meta = FACTORY.get_sync("bots", pre)
+
+    if FACTORY_CLIENT and pre == FACTORY_CLIENT.bot_id:
         clear_sess(c, uid)
-        await m.reply("⚠️ <b>This bot is already registered!</b>", parse_mode=PM_HTML); return
+        await m.reply("⚠️ <b>This is the Factory Bot itself!</b>", parse_mode=PM_HTML); return
+
+    if existing_meta:
+        # Check permissions: only supreme admin or the original owner can update token
+        if not is_supreme(uid) and existing_meta.get("owner_id") != uid:
+            clear_sess(c, uid)
+            await m.reply(f"⚠️ <b>@{existing_meta.get('username', pre)} is already registered by another user!</b>", parse_mode=PM_HTML); return
+
     st = await m.reply("⏳ Validating token & starting bot...")
     tmp = Client(name=f"cf{now()}", api_id=API_ID, api_hash=API_HASH, bot_token=tok,
                  in_memory=True, sleep_threshold=15)
@@ -2252,20 +2352,32 @@ async def clone_token(c, m):
         LOG.error("Clone start failed: %s", e)
         clear_sess(c, uid)
         await st.edit("⚠️ Failed to start bot — try again in a moment."); return
+
     me = await tmp.get_me()
     if FACTORY_CLIENT and me.id == FACTORY_CLIENT.bot_id:
         await tmp.stop(); clear_sess(c, uid)
         await st.edit("⚠️ This is the Factory Bot itself!"); return
-    if FACTORY.get_sync("bots", me.id):
-        await tmp.stop(); clear_sess(c, uid)
-        await st.edit(f"⚠️ @{me.username} is already registered!"); return
+
+    # If clone was running, stop old instance first
+    old_client = RUNNING.pop(me.id, None)
+    if old_client:
+        try: await old_client.stop()
+        except Exception: pass
+
     store = get_store(me.id)
     await ensure_defaults(store)
     await set_cfg(store, owner_id=uid)
-    await FACTORY.put("bots", me.id, {"_id": me.id, "username": me.username or str(me.id),
-                                      "name": me.first_name or "Bot", "owner_id": uid,
-                                      "owner_name": m.from_user.first_name or str(uid),
-                                      "token_enc": enc_token(tok), "created_at": now(), "last_active": now()})
+    bot_doc = existing_meta or {"_id": me.id, "created_at": now()}
+    bot_doc.update({
+        "username": me.username or str(me.id),
+        "name": me.first_name or "Bot",
+        "owner_id": uid,
+        "owner_name": m.from_user.first_name or str(uid),
+        "token_enc": enc_token(tok),
+        "last_active": now(),
+        "is_banned": False
+    })
+    await FACTORY.put("bots", me.id, bot_doc)
     await store.put("admins", uid, {"_id": str(uid), "name": hesc(m.from_user.first_name or uid),
                                     "role": "owner", "permissions": list(PERMS), "added_by": 0, "at": now()})
     attach(tmp, me, store, is_factory=False)
@@ -2555,9 +2667,21 @@ async def ed_apply(c, m, kind):
         if (m.text or "").strip().lower() == "remove":
             await c.store.update("episodes", ep_id(aid, sn, en), thumb_id=None, thumb_path=None, updated_at=now())
         else:
-            tid = m.photo.file_id if m.photo else (m.video.thumbs[0].file_id if m.video and m.video.thumbs else None)
+            tid = None
+            if m.photo:
+                tid = m.photo.file_id
+            elif m.document and m.document.thumbs:
+                tid = m.document.thumbs[0].file_id
+            elif m.video and m.video.thumbs:
+                tid = m.video.thumbs[0].file_id
+            elif m.animation and m.animation.thumbs:
+                tid = m.animation.thumbs[0].file_id
+            elif m.document:
+                tid = m.document.file_id
+
             if not tid:
-                await m.reply("🖼️ Send photo!", parse_mode=PM_HTML); return
+                await m.reply("🖼️ <b>Send photo or thumbnail image!</b>", parse_mode=PM_HTML); return
+
             os.makedirs(THUMB_DIR, exist_ok=True)
             path = os.path.join(THUMB_DIR, f"{c.bot_id}_{aid}_{sn}_{en}.jpg")
             try: await c.download_media(tid, file_name=path)
@@ -2729,10 +2853,20 @@ async def cb_fs(c, q, parts):
         await q_safe(q, "❌ NO FS PERM!"); return
     act = parts[1]
     if act == "off":
-        await set_cfg(c.store, fs_mode="off")
-        await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", "OFF", important=True)
-        await q_safe(q, "🔴 ForceSub OFF!")
+        await set_cfg(c.store, fs_mode="off", fs_channels=[], fs_channel=0, fs_username="", fs_link="")
+        await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", "OFF - Cleared All Channels", important=True)
+        await q_safe(q, "🔴 ForceSub Cleared!")
         await show_fs_panel(c, None, edit_msg=q.message)
+    elif act == "rm":
+        idx = int(parts[2])
+        st = cfg(c.store)
+        channels = list(st.get("fs_channels", []))
+        if 0 <= idx < len(channels):
+            removed = channels.pop(idx)
+            fs_mode = "off" if not channels else channels[-1].get("mode", "public")
+            await set_cfg(c.store, fs_channels=channels, fs_mode=fs_mode)
+            await q_safe(q, f"🗑️ Removed channel #{idx+1}")
+            await show_fs_panel(c, None, edit_msg=q.message)
     elif act in ("public", "private", "logch"):
         step = {"public": "fs_public", "private": "fs_private", "logch": "fs_logch"}[act]
         set_sess(c, uid, step)
@@ -3087,11 +3221,11 @@ async def h_callback(c, q):
             try: await q.message.reply(ranking_text(c.store), parse_mode=PM_HTML)
             except RPCError: pass
         elif data == "cloneme":
-            ok, fs_kb = await fs_state(c, uid)
+            ok, fs_kb = await fs_state(c, uid, is_clone_action=True)
             if not ok:
                 await unauthorized(c, uid)
                 await q_safe(q, "🔐 Access Locked!", alert=True)
-                try: await q.message.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b>\n\nYou must join the required channel before creating your bot clone. Press ✅ ᴠᴇʀɪꜰʏ after joining.", reply_markup=fs_kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
+                try: await q.message.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇ¨!</b>\n\nYou must join the required channel before creating your bot clone. Press ✅ ᴠᴇʀɪꜰʏ after joining.", reply_markup=fs_kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
                 except RPCError: pass
                 return
             set_sess(c, uid, "clone_token")
@@ -3514,15 +3648,32 @@ async def h_join_request(c, update, users, chats):
         req = getattr(update, "bot_chat_join_request", None)
         if not req: return
         st = cfg(c.store)
-        if st.get("fs_mode") != "private" or req.chat_id != st.get("fs_channel"):
+        channels = st.get("fs_channels", [])
+        if not channels and st.get("fs_mode") != "off" and st.get("fs_channel"):
+            channels = [{"mode": st.get("fs_mode"), "chat_id": st.get("fs_channel")}]
+
+        # Check if chat_id matches any configured ForceSub channel
+        matched = False
+        for ch in channels:
+            if ch.get("chat_id") and str(ch["chat_id"]) == str(req.chat_id):
+                matched = True
+                break
+
+        if not matched:
             return
+
         uid = req.user_id
         u = await c.store.get("users", uid)
+        verified_chats = set((u.get("fs_verified_chats") or []) if u else [])
+        verified_chats.add(str(req.chat_id))
+
         if not u:
             u = {"_id": str(uid), "first_name": "User", "username": "", "started_at": now(),
-                 "last_seen": now(), "fs_verified": True}
+                 "last_seen": now(), "fs_verified": True, "fs_verified_chats": list(verified_chats)}
             await c.store.put("users", uid, u)
-        await c.store.update("users", uid, fs_verified=True, fs_request=True)
+        else:
+            await c.store.update("users", uid, fs_verified=True, fs_request=True, fs_verified_chats=list(verified_chats))
+
         ap = getattr(c, "approve_chat_join_request", None)
         if ap:
             try: await ap(req.chat_id, uid)
