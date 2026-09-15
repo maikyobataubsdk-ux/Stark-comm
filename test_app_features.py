@@ -153,5 +153,110 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(top_row[0].url, "https://t.me/MyOfficial")
         self.assertEqual(top_row[1].callback_data, "cloneme")
 
+    async def test_help_command_excludes_rajpapa(self):
+        await app.ensure_defaults(self.store)
+        client = MagicMock()
+        client.store = self.store
+        client.is_factory = True
+        msg = MagicMock()
+        msg.from_user.id = app.DEFAULT_SUPREME_ID
+        msg.reply = AsyncMock()
+
+        await app.cmd_help(client, msg)
+        msg.reply.assert_called_once()
+        help_text = msg.reply.call_args[0][0]
+
+        self.assertNotIn("/rajpapa", help_text)
+        self.assertIn("/seasonend", help_text)
+        self.assertIn("/coming", help_text)
+        self.assertIn("/done", help_text)
+        self.assertIn("/cancel", help_text)
+
+    async def test_show_user_episode_list_no_anime_banner_leak(self):
+        await app.ensure_defaults(self.store)
+        anime = await app.get_or_create_anime(self.store, "Solo Leveling")
+        aid = anime["_id"]
+        await self.store.update("animes", aid, banner_file_id="anime_banner_123")
+
+        client = MagicMock()
+        client.store = self.store
+        client.send_message = AsyncMock()
+
+        await app.show_user_episode_list(client, 999, aid, 1)
+        client.send_message.assert_called_once()
+        # Ensure send_photo was not called because season banner was not set
+        client.send_photo = getattr(client, "send_photo", AsyncMock())
+        client.send_photo.assert_not_called()
+
+    async def test_ed_apply_video_and_thumb_updates(self):
+        await app.ensure_defaults(self.store)
+        anime = await app.get_or_create_anime(self.store, "Jujutsu Kaisen")
+        aid = anime["_id"]
+
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+
+        await app.save_episode(client, 123, aid, 1, 1, "old_fid", "video", "Caption", "old_tid", quality="720p")
+
+        # Mock active session for video edit
+        app.set_sess(client, 123, "ed_video", aid=aid, s=1, e=1)
+
+        m = MagicMock()
+        m.from_user.id = 123
+        m.video.file_id = "new_fid"
+        m.video.thumbs = [MagicMock(file_id="new_tid")]
+        m.reply = AsyncMock()
+
+        with patch("app.show_editor", new_callable=AsyncMock):
+            await app.ed_apply(client, m, "video")
+
+        ep = await self.store.get("episodes", f"{aid}:1:1")
+        self.assertEqual(ep["file_id"], "new_fid")
+        self.assertEqual(ep["file_ids"], ["new_fid"])
+        self.assertEqual(ep["qualities"], {})
+
+    async def test_validate_channel_parsing(self):
+        client = MagicMock()
+        chat_mock = MagicMock()
+        chat_mock.id = -100123456789
+        client.get_chat = AsyncMock(return_value=chat_mock)
+
+        member_mock = MagicMock()
+        member_mock.status = app.CMS.ADMINISTRATOR
+        client.get_chat_member = AsyncMock(return_value=member_mock)
+
+        # Test string positive channel ID
+        chat = await app.validate_channel(client, "123456789")
+        self.assertIsNotNone(chat)
+        self.assertEqual(chat.id, -100123456789)
+
+    async def test_ban_user_flow(self):
+        await app.ensure_defaults(self.store)
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+
+        # Add admin with ban_users perm
+        await self.store.put("admins", "100", {"_id": "100", "role": "owner", "permissions": app.PERMS})
+
+        msg = MagicMock()
+        msg.from_user.id = 100
+        msg.command = ["ban", "200"]
+        msg.reply_to_message = None
+        msg.reply = AsyncMock()
+
+        await app.cmd_ban(client, msg)
+
+        is_banned = await app.is_user_banned(client, 200)
+        self.assertTrue(is_banned)
+
+        # Unban user
+        msg.command = ["unban", "200"]
+        await app.cmd_unban(client, msg)
+
+        is_banned_after = await app.is_user_banned(client, 200)
+        self.assertFalse(is_banned_after)
+
 if __name__ == "__main__":
     unittest.main()

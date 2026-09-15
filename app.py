@@ -816,7 +816,7 @@ async def show_user_episode_list(c, chat_id, aid, sn, page=1, edit_msg=None):
     title = anime.get("title", "Anime") if anime else "Anime"
     st_map = (anime or {}).get("seasons", {})
     s_info = st_map.get(str(sn), {}) if isinstance(st_map.get(str(sn)), dict) else {}
-    s_banner_fid = s_info.get("banner_file_id") or (anime or {}).get("banner_file_id")
+    s_banner_fid = s_info.get("banner_file_id")
     s_banner_cap = s_info.get("banner_caption")
 
     eps = [v for v in c.store.c("episodes").values() if v.get("anime_id") == aid and v.get("season") == sn]
@@ -954,6 +954,10 @@ async def send_episode(c, chat_id, aid, s, e, user=None, req_quality=None):
 # ═════════════════════ ᴄᴏᴍᴍᴀɴᴅ ʜᴀɴᴅʟᴇʀꜱ ═════════════════════
 async def cmd_start(c, m):
     uid = m.from_user.id
+    if await is_user_banned(c, uid):
+        try: await m.reply("❌ <b>You are banned from using this bot!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
     user = await ensure_user(c, m.from_user)
     payload = m.command[1] if len(m.command) > 1 else ""
     if payload.startswith("anime_"):
@@ -1069,11 +1073,20 @@ async def send_refer(c, chat_id, uid):
     await c.send_message(chat_id, txt, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE, reply_markup=kb)
 
 async def cmd_refer(c, m):
+    uid = m.from_user.id
+    if await is_user_banned(c, uid):
+        try: await m.reply("❌ <b>You are banned from using this bot!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
     await ensure_user(c, m.from_user)
     await send_refer(c, m.chat.id, m.from_user.id)
 
 async def cmd_help(c, m):
     uid = m.from_user.id
+    if await is_user_banned(c, uid):
+        try: await m.reply("❌ <b>You are banned from using this bot!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
     user = await ensure_user(c, m.from_user)
     is_adm = is_supreme(uid) or (await c.store.get("admins", uid) is not None)
 
@@ -1105,7 +1118,11 @@ async def cmd_help(c, m):
                 "▸ /editadmin — Modify Admin Rights\n"
                 "▸ /remadmin — Remove Admin\n"
                 "▸ /ban — Ban User\n"
-                "▸ /unban — Unban User\n")
+                "▸ /unban — Unban User\n"
+                "▸ /seasonend — Mark Season Ended\n"
+                "▸ /coming — Mark Season Coming Soon\n"
+                "▸ /done — Finish Upload Session\n"
+                "▸ /cancel — Cancel Active Session\n")
 
     if is_supreme(uid):
         txt += ("\n👑 <b>ꜱᴜᴘʀᴇᴍᴇ ᴄᴏᴍᴍᴀɴᴅꜱ:</b>\n"
@@ -1962,15 +1979,16 @@ async def cmd_ban(c, m):
     if not t:
         set_sess(c, uid, "ban_target")
         await m.reply("🚫 Reply to user or send ID to ban:\n<code>/ban 123456789</code>", parse_mode=PM_HTML); return
-    if is_supreme(t) or (await c.store.get("admins", t)):
+    t_str = str(t)
+    if is_supreme(t) or (await c.store.get("admins", t_str)) or (await c.store.get("admins", t)):
         await m.reply("❌ Cannot ban an Admin / Supreme Owner!", parse_mode=PM_HTML); return
-    u = await c.store.get("users", t) or {"_id": str(t), "first_name": name or str(t), "started_at": now(), "last_seen": now()}
+    u = await c.store.get("users", t_str) or await c.store.get("users", t) or {"_id": t_str, "first_name": name or t_str, "started_at": now(), "last_seen": now()}
     u["is_banned"] = True
     u["banned_by"] = uid
     u["banned_at"] = now()
-    await c.store.put("users", t, u)
-    await log_event(c, "🚫 ᴜꜱᴇʀ ʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
-    await m.reply(f"🚫 <b>User {t} has been banned!</b>", parse_mode=PM_HTML)
+    await c.store.put("users", t_str, u)
+    await log_event(c, "🚫 ᴜꜱᴇʀ ʙᴀɴɴᴇᴅ", f"User: {t_str}", important=True, uid=uid)
+    await m.reply(f"🚫 <b>User {t_str} has been banned!</b>", parse_mode=PM_HTML)
 
 async def cmd_unban(c, m):
     uid = m.from_user.id
@@ -1980,13 +1998,58 @@ async def cmd_unban(c, m):
     if not t:
         set_sess(c, uid, "unban_target")
         await m.reply("🟢 Reply to user or send ID to unban:\n<code>/unban 123456789</code>", parse_mode=PM_HTML); return
-    u = await c.store.get("users", t)
+    t_str = str(t)
+    u = await c.store.get("users", t_str) or await c.store.get("users", t)
     if not u or not u.get("is_banned"):
         await m.reply("ℹ️ User is not banned.", parse_mode=PM_HTML); return
     u["is_banned"] = False
-    await c.store.put("users", t, u)
-    await log_event(c, "🟢 ᴜꜱᴇʀ ᴜɴʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
-    await m.reply(f"🟢 <b>User {t} has been unbanned!</b>", parse_mode=PM_HTML)
+    await c.store.put("users", t_str, u)
+    await log_event(c, "🟢 ᴜꜱᴇʀ ᴜɴʙᴀɴɴᴇᴅ", f"User: {t_str}", important=True, uid=uid)
+    await m.reply(f"🟢 <b>User {t_str} has been unbanned!</b>", parse_mode=PM_HTML)
+
+async def show_ban_panel(c, chat_id, edit_msg=None):
+    banned_users = [u for u in c.store.find("users") if u.get("is_banned")]
+    rows = [
+        [btn("🚫 Ban User by ID", "banui|ban_prompt"), btn("🟢 Unban User by ID", "banui|unban_prompt")]
+    ]
+    for u in banned_users[:8]:
+        uname = u.get("first_name") or u.get("username") or u["_id"]
+        rows.append([btn(f"🟢 Unban {uname[:16]}", f"banui|do_unban|{u['_id']}")])
+    rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|refresh")])
+
+    txt = (f"🚫 <b>ʙᴀɴ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ ᴘᴀɴᴇʟ</b>\n━━━━━━━━━━━━━━\n"
+           f"👥 Total Banned Users: <b>{len(banned_users)}</b>\n\n"
+           f"Select an option or tap on a banned user to unban:")
+    kb = InlineKeyboardMarkup(rows)
+    if edit_msg is not None:
+        try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
+        except RPCError: pass
+    else:
+        await c.send_message(chat_id, txt, reply_markup=kb, parse_mode=PM_HTML)
+
+async def cb_ban_ui(c, q, parts):
+    uid = q.from_user.id
+    if not await perm_ok(c, uid, "ban_users"):
+        await q_safe(q, "❌ NO BAN PERMISSION!"); return
+    act = parts[1]
+    if act == "ban_prompt":
+        set_sess(c, uid, "ban_target")
+        await q_safe(q, "🚫 Send User ID")
+        try: await q.message.edit_text("🚫 <b>Send User ID to ban:</b>\n\n(or send /cancel)", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "unban_prompt":
+        set_sess(c, uid, "unban_target")
+        await q_safe(q, "🟢 Send User ID")
+        try: await q.message.edit_text("🟢 <b>Send User ID to unban:</b>\n\n(or send /cancel)", parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "do_unban":
+        t_str = parts[2]
+        u = await c.store.get("users", t_str)
+        if u:
+            u["is_banned"] = False
+            await c.store.put("users", t_str, u)
+        await q_safe(q, "🟢 User Unbanned!")
+        await show_ban_panel(c, None, edit_msg=q.message)
 
 async def show_admins_list(c, chat_id, edit_msg=None):
     docs = c.store.find("admins")
@@ -2032,10 +2095,39 @@ async def cmd_setfs(c, m):
     await show_fs_panel(c, m.chat.id)
 
 async def validate_channel(c, ref):
-    try:
-        chat = await c.get_chat(ref)
-    except RPCError:
+    if not ref:
         return None
+    ref_str = str(ref).strip()
+    if "t.me/" in ref_str:
+        ref_str = ref_str.split("t.me/")[-1].strip("/")
+        if ref_str.startswith("c/"):
+            ref_str = ref_str[2:]
+            if ref_str.isdigit():
+                ref_str = f"-100{ref_str}"
+
+    candidates = []
+    if ref_str.lstrip("-").isdigit():
+        val = int(ref_str)
+        candidates.append(val)
+        if val > 0:
+            candidates.append(int(f"-100{val}"))
+    else:
+        if not ref_str.startswith("@") and not ref_str.startswith("http"):
+            candidates.append(f"@{ref_str}")
+        candidates.append(ref_str)
+
+    chat = None
+    for cand in candidates:
+        try:
+            chat = await c.get_chat(cand)
+            if chat:
+                break
+        except RPCError:
+            continue
+
+    if not chat:
+        return None
+
     try:
         mem = await c.get_chat_member(chat.id, "me")
         if mem.status not in (CMS.OWNER, CMS.ADMINISTRATOR):
@@ -2057,11 +2149,22 @@ async def fs_got_channel(c, m, mode):
         await set_cfg(store, fs_mode="public", fs_channel=chat.id, fs_username=chat.username)
         await m.reply(f"✅ <b>Public ForceSub ON!</b>\n\n📢 @{chat.username}", parse_mode=PM_HTML)
     else:
+        link_str = None
         try:
-            link = await c.create_chat_invite_link(chat.id, creates_join_request=True)
+            res = await c.create_chat_invite_link(chat.id, creates_join_request=True)
+            link_str = getattr(res, "invite_link", None) or str(res)
         except RPCError:
+            try:
+                res = await c.create_chat_invite_link(chat.id)
+                link_str = getattr(res, "invite_link", None) or str(res)
+            except RPCError:
+                try:
+                    link_str = await c.export_chat_invite_link(chat.id)
+                except RPCError:
+                    link_str = getattr(chat, "invite_link", None)
+        if not link_str:
             await m.reply("❌ Invite link creation failed — give bot invite permission.", parse_mode=PM_HTML); return
-        await set_cfg(store, fs_mode="private", fs_channel=chat.id, fs_link=link.invite_link,
+        await set_cfg(store, fs_mode="private", fs_channel=chat.id, fs_link=link_str,
                       fs_username=chat.username or "")
         await m.reply(f"✅ <b>Private Request ForceSub ON!</b>\n\n🔗 Link Ready — Join requests will auto-approve.", parse_mode=PM_HTML)
     await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", f"Mode: {mode} | Chat: {chat.id}", important=True)
@@ -2431,14 +2534,24 @@ async def ed_apply(c, m, kind):
         mtype, fid, tid = get_media(m)
         if not fid:
             await m.reply("🎬 <b>Send video file!</b>", parse_mode=PM_HTML); return
-        upd = {"file_id": fid, "type": mtype, "updated_at": now()}
-        if tid: upd["thumb_id"] = tid; upd["thumb_path"] = None
+        upd = {"file_id": fid, "file_ids": [fid], "qualities": {}, "type": mtype, "updated_at": now()}
+        if tid:
+            p = ep.get("thumb_path")
+            if p and os.path.exists(p):
+                try: os.remove(p)
+                except OSError: pass
+            upd["thumb_id"] = tid
+            upd["thumb_path"] = None
         await c.store.update("episodes", ep_id(aid, sn, en), **upd)
         await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"{aid} S{sn} E{en} — Video Replaced", important=True, uid=uid)
     elif kind == "cap":
         await c.store.update("episodes", ep_id(aid, sn, en), caption=m.text or "", updated_at=now())
         await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"{aid} S{sn} E{en} — Caption Updated", important=True, uid=uid)
     elif kind == "thumb":
+        p = ep.get("thumb_path")
+        if p and os.path.exists(p):
+            try: os.remove(p)
+            except OSError: pass
         if (m.text or "").strip().lower() == "remove":
             await c.store.update("episodes", ep_id(aid, sn, en), thumb_id=None, thumb_path=None, updated_at=now())
         else:
@@ -2492,6 +2605,8 @@ async def cb_panel(c, q, parts):
         await q_safe(q, "👥"); await show_admins_list(c, None, edit_msg=q.message)
     elif act == "logch":
         await q_safe(q, "🧾 Log Channel"); await show_log_panel(c, None, edit_msg=q.message)
+    elif act == "banuser":
+        await q_safe(q, "🚫 Ban System"); await show_ban_panel(c, None, edit_msg=q.message)
     elif act == "set_offlink":
         set_sess(c, uid, "pan_offlink_input")
         await q_safe(q, "📢 Send Official Link")
@@ -3030,6 +3145,8 @@ async def h_callback(c, q):
             await cb_fs(c, q, data.split("|"))
         elif data.startswith("log|"):
             await cb_log(c, q, data.split("|"))
+        elif data.startswith("banui|"):
+            await cb_ban_ui(c, q, data.split("|"))
         elif data.startswith("adm|"):
             await cb_adm(c, q, data.split("|"))
         elif data.startswith("sv|"):
