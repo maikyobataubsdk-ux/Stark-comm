@@ -1040,6 +1040,10 @@ async def cmd_start(c, m):
 
 async def episode_request(c, m):
     uid = m.from_user.id
+    if await is_user_banned(c, uid):
+        try: await m.reply("❌ <b>You are banned from using this bot!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
     if not rate_ok(c, uid): return
     ok, kb = await fs_state(c, uid)
     if not ok:
@@ -1974,16 +1978,20 @@ def msg_target(m):
     if m.reply_to_message and m.reply_to_message.from_user:
         tu = m.reply_to_message.from_user
         return tu.id, tu.first_name or str(tu.id)
-    if len(m.command) > 1 and m.command[1].lstrip("-").isdigit():
+    if m.command and len(m.command) > 1 and m.command[1].lstrip("-").isdigit():
         return int(m.command[1]), (" ".join(m.command[2:]) or m.command[1])
     return None, None
 
 async def open_selector(c, m, t, name, must_exist=False):
-    exist = await c.store.get("admins", t)
+    exist = await c.store.get("admins", str(t)) or await c.store.get("admins", t)
     if must_exist and not exist:
         await m.reply("❌ That user is not an admin."); return
     if exist and exist.get("role") == "owner":
         await m.reply("👑 Clone owner's permissions cannot be changed."); return
+    if not name or name == str(t):
+        u = await c.store.get("users", str(t)) or await c.store.get("users", t)
+        if u:
+            name = u.get("first_name") or u.get("username") or str(t)
     d = {"uid": t, "name": hesc(name or (exist or {}).get("name") or str(t)),
          "perms": list(exist["permissions"]) if exist else [],
          "role": exist["role"] if exist else "custom", "new": exist is None}
@@ -3048,8 +3056,8 @@ async def cb_adm(c, q, parts):
         except RPCError: pass
     elif action == "save":
         was_new = tgt is None
-        await c.store.put("admins", tuid, {"_id": str(tuid), "name": d.get("name", "User"), "role": d["role"],
-                                           "permissions": d["perms"], "added_by": uid, "at": now()})
+        await c.store.put("admins", str(tuid), {"_id": str(tuid), "name": d.get("name", "User"), "role": d["role"],
+                                               "permissions": d["perms"], "added_by": uid, "at": now()})
         await apply_admin_commands(c, tuid)
         SESSIONS.pop((c.bot_id, uid), None)
         await q_safe(q, "💾 Saved! DB updated ✅")
@@ -3718,31 +3726,39 @@ async def route_session(c, m, s):
         await m.reply(f"✅ <b>Season {sn} marked as {st_text}!</b>", parse_mode=PM_HTML)
     elif step == "ga_target" and m.text:
         t, name = msg_target(m)
-        if not t and (m.text or "").strip().isdigit():
-            t = int(m.text.strip()); name = str(t)
+        if not t:
+            txt_parts = m.text.strip().split(maxsplit=1)
+            if txt_parts and txt_parts[0].lstrip("-").isdigit():
+                t = int(txt_parts[0])
+                name = txt_parts[1] if len(txt_parts) > 1 else ""
         if not t:
             await m.reply("👤 Send User ID or reply:"); return
         clear_sess(c, uid)
         await open_selector(c, m, t, name)
     elif step == "ea_target" and m.text:
         t, name = msg_target(m)
-        if not t and (m.text or "").strip().isdigit():
-            t = int(m.text.strip()); name = str(t)
+        if not t:
+            txt_parts = m.text.strip().split(maxsplit=1)
+            if txt_parts and txt_parts[0].lstrip("-").isdigit():
+                t = int(txt_parts[0])
+                name = txt_parts[1] if len(txt_parts) > 1 else ""
         if not t:
             await m.reply("❌ Send User ID:"); return
         clear_sess(c, uid)
         await open_selector(c, m, t, name, must_exist=True)
     elif step == "ra_target" and m.text:
         t, _ = msg_target(m)
-        if not t and (m.text or "").strip().isdigit():
-            t = int(m.text.strip())
+        if not t:
+            txt_parts = m.text.strip().split(maxsplit=1)
+            if txt_parts and txt_parts[0].lstrip("-").isdigit():
+                t = int(txt_parts[0])
         if not t:
             await m.reply("❌ Send User ID:"); return
         clear_sess(c, uid)
-        tgt = await c.store.get("admins", t)
+        tgt = await c.store.get("admins", str(t)) or await c.store.get("admins", t)
         if not tgt: await m.reply("❌ Not an admin."); return
         if tgt.get("role") == "owner": await m.reply("👑 Clone owner cannot be removed!"); return
-        await c.store.delete("admins", t)
+        await c.store.delete("admins", str(t))
         await log_event(c, "🚫 ᴀᴅᴍɪɴ ʀᴇᴍᴏᴠᴇᴅ", f"Admin: {t}", important=True, uid=t)
         await m.reply("🗑 <b>Admin removed!</b>", parse_mode=PM_HTML)
     elif step == "ban_target" and m.text:
@@ -3844,13 +3860,17 @@ async def h_join_request(c, update, users, chats):
             chat_id = utils.get_peer_id(update.peer)
         elif hasattr(update, "bot_chat_join_request") and getattr(update, "bot_chat_join_request"):
             req = update.bot_chat_join_request
-            uid = req.user_id
-            chat_id = req.chat_id
-        elif hasattr(update, "user_id") and hasattr(update, "chat_id"):
-            uid = getattr(update, "user_id")
-            chat_id = getattr(update, "chat_id")
+            uid = getattr(req, "user_id", None)
+            chat_id = getattr(req, "chat_id", None)
+        if not uid or not chat_id:
+            if hasattr(update, "user_id") and hasattr(update, "chat_id"):
+                uid = getattr(update, "user_id", None)
+                chat_id = getattr(update, "chat_id", None)
 
         if not uid or not chat_id:
+            return
+
+        if await is_user_banned(c, uid):
             return
 
         # Check ForceSub channels for this bot (or Factory if factory client)
@@ -3915,33 +3935,18 @@ async def h_join_request(c, update, users, chats):
         await convert_referral(c, uid)
         await log_event(c, "✅ ꜰꜱ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ", f"User: {uid} | Chat: {chat_id}", uid=uid)
 
-        # Resume pending action / notify user
+        # Resume pending action / send start message
         user_doc = await c.store.get("users", str(uid)) or u
-        pending_action = user_doc.get("pending_action") if user_doc else None
-        if not pending_action and FACTORY:
-            f_user = await FACTORY.get("users", str(uid))
-            if f_user:
-                pending_action = f_user.get("pending_action")
+        await c.store.update("users", str(uid), pending_action=None)
+        if FACTORY:
+            await FACTORY.update("users", str(uid), pending_action=None)
         pending_anime = user_doc.get("pending_anime") if user_doc else None
 
-        if pending_action == "clone":
-            await c.store.update("users", str(uid), pending_action=None)
-            if FACTORY:
-                await FACTORY.update("users", str(uid), pending_action=None)
-            set_sess(c, uid, "clone_token")
-            try:
-                await c.send_message(uid, CLONE_PROMPT, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE,
-                                     reply_markup=InlineKeyboardMarkup([[btn("🔴 ᴄᴀɴᴄᴇʟ", "cl|cancel")]]))
-            except RPCError:
-                pass
-        elif pending_anime:
+        if pending_anime:
             await c.store.update("users", str(uid), pending_anime=None)
             await show_user_season_list(c, uid, pending_anime)
         else:
-            try:
-                await c.send_message(uid, "✅ <b>ᴀᴄᴄᴇꜱꜱ ᴀᴘᴘʀᴏᴠᴇᴅ!</b>\n\nPress /start or select an anime to watch ✨", parse_mode=PM_HTML)
-            except RPCError:
-                pass
+            await send_start_content(c, uid, user_doc)
     except Exception as e:
         LOG.exception("Join request error")
         await dev_log(f"⚠️ Join request error: {e!r}")

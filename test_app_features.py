@@ -216,6 +216,71 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ep["file_ids"], ["new_fid"])
         self.assertEqual(ep["qualities"], {})
 
+    async def test_msg_target_with_none_command(self):
+        msg = MagicMock()
+        msg.reply_to_message = None
+        msg.command = None
+        target_id, target_name = app.msg_target(msg)
+        self.assertIsNone(target_id)
+        self.assertIsNone(target_name)
+
+    async def test_add_and_edit_admin(self):
+        await app.ensure_defaults(self.store)
+        await self.store.put("admins", "100", {"_id": "100", "role": "owner", "permissions": app.PERMS})
+
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+
+        # Add admin by target ID session
+        msg = MagicMock()
+        msg.from_user.id = 100
+        msg.reply_to_message = None
+        msg.text = "200 NewAdmin"
+        msg.reply = AsyncMock()
+
+        app.set_sess(client, 100, "ga_target")
+        await app.route_session(client, msg, app.get_sess(client, 100))
+
+        # Check session updated to adm_edit
+        sess = app.get_sess(client, 100)
+        self.assertEqual(sess["step"], "adm_edit")
+        self.assertEqual(sess["data"]["uid"], 200)
+
+        # Execute save callback
+        q = MagicMock()
+        q.from_user.id = 100
+        q.data = "adm|save|200"
+        q.answer = AsyncMock()
+        q.message.edit_text = AsyncMock()
+
+        await app.h_callback(client, q)
+
+        admin_doc = await self.store.get("admins", "200")
+        self.assertIsNotNone(admin_doc)
+        self.assertEqual(admin_doc["role"], "custom")
+
+    async def test_join_request_sends_start_message(self):
+        await app.ensure_defaults(self.store)
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+        client.username = "testbot"
+        client.is_factory = False
+        client.send_message = AsyncMock()
+        client.approve_chat_join_request = AsyncMock()
+
+        await app.set_cfg(self.store, fs_channels=[{"mode": "private", "chat_id": -100999, "username": "", "link": "https://t.me/+abc"}])
+
+        update = MagicMock(spec=["user_id", "chat_id"])
+        update.user_id = 12345
+        update.chat_id = -100999
+
+        with patch("app.send_start_content", new_callable=AsyncMock) as mock_send_start:
+            await app.h_join_request(client, update, None, None)
+            mock_send_start.assert_called_once()
+            self.assertEqual(mock_send_start.call_args[0][1], 12345)
+
     async def test_validate_channel_parsing(self):
         client = MagicMock()
         chat_mock = MagicMock()
