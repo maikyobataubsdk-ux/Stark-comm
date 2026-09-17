@@ -373,11 +373,12 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
         m.document = None
         m.reply = AsyncMock()
 
-        with patch("app.show_editor", new_callable=AsyncMock):
+        with patch("app.show_editor", new_callable=AsyncMock), patch("os.path.exists", return_value=True):
             await app.ed_apply(client, m, "thumb")
 
         ep = await self.store.get("episodes", f"{aid}:1:1")
         self.assertEqual(ep["thumb_id"], "new_photo_thumb_fid")
+        self.assertEqual(ep["thumb_path"], "/tmp/test_thumb.jpg")
 
 if __name__ == "__main__":
     unittest.main()
