@@ -136,10 +136,8 @@ CLONE_SUCCESS = (
     "🆔: <code>{bid}</code>\n"
     "👤 ᴏᴡɴᴇʀ: <b>{name}</b>\n\n"
     "✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ + ᴄᴏᴍᴍᴀɴᴅꜱ ᴀᴜᴛᴏ-ꜱᴇᴛ\n\n"
-    "📌 <b>ɴᴇxᴛ ꜱᴛᴇᴘꜱ:</b>\n"
-    "▸ /setfs — Force Subscribe\n"
-    "▸ /editstart — Customize Start Msg\n"
-    "▸ /upload — Add Anime Episodes\n\n"
+    "📌 <b>ɴᴇxᴛ ꜱᴛᴇᴘ:</b>\n"
+    "▸ /admin — Open Admin Panel\n"
     "🚀 ʏᴏᴜʀ ʙᴏᴛ ɪꜱ ʟɪᴠᴇ ɴᴏᴡ!")
 
 ADMIN_PANEL_TXT = (
