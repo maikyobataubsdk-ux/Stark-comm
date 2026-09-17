@@ -258,5 +258,126 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
         is_banned_after = await app.is_user_banned(client, 200)
         self.assertFalse(is_banned_after)
 
+    async def test_transfer_ownership_flow(self):
+        await app.ensure_defaults(self.store)
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+        client.username = "testbot"
+        client.is_factory = False
+        client.send_message = AsyncMock()
+
+        # Set owner 111
+        await app.set_cfg(self.store, owner_id=111)
+        await self.store.put("admins", "111", {"_id": "111", "name": "Old Owner", "role": "owner", "permissions": app.PERMS})
+
+        # Test transfer to non-existent user 222 (not started bot)
+        msg1 = MagicMock()
+        msg1.from_user.id = 111
+        msg1.text = "222"
+        msg1.reply = AsyncMock()
+
+        app.set_sess(client, 111, "transfer_owner_target")
+        await app.route_session(client, msg1, app.get_sess(client, 111))
+        msg1.reply.assert_called_once()
+        self.assertIn("USER HAS NOT STARTED THE BOT", msg1.reply.call_args[0][0])
+
+        # Register user 222 in bot's database
+        await self.store.put("users", "222", {"_id": "222", "first_name": "New Owner", "started_at": app.now()})
+
+        # Now target user exists -> route_session prompts for confirmation
+        msg2 = MagicMock()
+        msg2.from_user.id = 111
+        msg2.text = "222"
+        msg2.reply = AsyncMock()
+
+        app.set_sess(client, 111, "transfer_owner_target")
+        await app.route_session(client, msg2, app.get_sess(client, 111))
+        msg2.reply.assert_called_once()
+        self.assertIn("CONFIRM OWNERSHIP TRANSFER", msg2.reply.call_args[0][0])
+
+        # Execute callback `adm|do_transfer|222`
+        q = MagicMock()
+        q.from_user.id = 111
+        q.data = "adm|do_transfer|222"
+        q.answer = AsyncMock()
+        q.message.edit_text = AsyncMock()
+
+        await app.h_callback(client, q)
+
+        # Verify new owner configuration
+        cfg = app.cfg(self.store)
+        self.assertEqual(cfg["owner_id"], 222)
+
+        new_owner_doc = await self.store.get("admins", "222")
+        self.assertIsNotNone(new_owner_doc)
+        self.assertEqual(new_owner_doc["role"], "owner")
+
+        old_owner_doc = await self.store.get("admins", "111")
+        self.assertEqual(old_owner_doc["role"], "manager")
+
+    async def test_clone_forcesub_verification_flow(self):
+        await app.ensure_defaults(self.store)
+        await app.ensure_defaults(app.FACTORY)
+
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+        client.username = "factorybot"
+        client.is_factory = True
+        client.send_message = AsyncMock()
+
+        # Set user with pending_action = "clone"
+        await self.store.put("users", "777", {"_id": "777", "first_name": "CloneUser", "pending_action": "clone"})
+
+        # Mock fs_state to return True (verified)
+        with patch("app.fs_state", new_callable=AsyncMock) as mock_fs:
+            mock_fs.return_value = (True, None)
+
+            q = MagicMock()
+            q.from_user.id = 777
+            q.from_user.first_name = "CloneUser"
+            q.data = "ckfs"
+            q.answer = AsyncMock()
+            q.message.delete = AsyncMock()
+
+            await app.h_callback(client, q)
+
+            # Verify session set to clone_token and CLONE_PROMPT sent directly
+            sess = app.get_sess(client, 777)
+            self.assertIsNotNone(sess)
+            self.assertEqual(sess["step"], "clone_token")
+
+            client.send_message.assert_called_once()
+            self.assertIn("ᴄʀᴇᴀᴛᴇ ʏᴏᴜʀ ᴏᴡɴ ᴀɴɪᴍᴇ ʙᴏᴛ", client.send_message.call_args[0][1])
+
+    async def test_episode_thumb_replacement(self):
+        await app.ensure_defaults(self.store)
+        anime = await app.get_or_create_anime(self.store, "Demon Slayer")
+        aid = anime["_id"]
+
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+        client.download_media = AsyncMock(return_value="/tmp/test_thumb.jpg")
+
+        await app.save_episode(client, 123, aid, 1, 1, "video_123", "video", "Caption", None)
+
+        # Set active session for thumb edit
+        app.set_sess(client, 123, "ed_thumb", aid=aid, s=1, e=1)
+
+        m = MagicMock()
+        m.from_user.id = 123
+        m.text = None
+        m.photo = MagicMock(file_id="new_photo_thumb_fid")
+        m.document = None
+        m.reply = AsyncMock()
+
+        with patch("app.show_editor", new_callable=AsyncMock):
+            await app.ed_apply(client, m, "thumb")
+
+        ep = await self.store.get("episodes", f"{aid}:1:1")
+        self.assertEqual(ep["thumb_id"], "new_photo_thumb_fid")
+
 if __name__ == "__main__":
     unittest.main()

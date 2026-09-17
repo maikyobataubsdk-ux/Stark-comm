@@ -1903,13 +1903,19 @@ async def show_anime_content_list(c, chat_id, query):
         await asyncio.sleep(0.3)
 
 # ─────────── ᴀᴅᴍɪɴ ᴘᴀɴᴇʟ ───────────
-def admin_panel_kb():
-    return InlineKeyboardMarkup([
+def admin_panel_kb(c=None, uid=None):
+    rows = [
         [btn("🟢 Upload", "pan|upload"), btn("🔵 Edit", "pan|edit"), btn("🔴 Delete", "pan|del")],
         [btn("🟣 Broadcast", "pan|bc"), btn("🟠 Stats", "pan|stats"), btn("⚪ List", "adm_list|menu")],
         [btn("🔐 Force Sub", "pan|fs"), btn("📝 Start Msg", "pan|es"), btn("👥 Admins", "pan|admins")],
         [btn("🧾 Log Channel", "pan|logch"), btn("📢 Official Link", "pan|set_offlink"), btn("🚫 Ban User", "pan|banuser")],
-        [btn("🔗 Anime Links", "pan|anlinks"), btn("🔗 Custom Buttons", "pan|cbtn"), btn("🧹 Clear Database", "pan|cleardb")]])
+        [btn("🔗 Anime Links", "pan|anlinks"), btn("🔗 Custom Buttons", "pan|cbtn"), btn("🧹 Clear Database", "pan|cleardb")]
+    ]
+    if c and not c.is_factory:
+        is_owner = (uid and (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner"))
+        if is_owner:
+            rows.append([btn("🗑️ Delete Clone Bot", "pan|delclone")])
+    return InlineKeyboardMarkup(rows)
 
 def log_panel_kb():
     return InlineKeyboardMarkup([
@@ -1939,7 +1945,7 @@ async def cmd_admin(c, m):
         await m.reply("❌ You're not an admin here."); return
     role = ROLE_NAME.get(doc["role"], doc["role"]) if doc else "👑 Supreme"
     await m.reply(ADMIN_PANEL_TXT.format(uname=c.username, role=role),
-                  reply_markup=admin_panel_kb(), parse_mode=PM_HTML)
+                  reply_markup=admin_panel_kb(c, uid), parse_mode=PM_HTML)
 
 # ─────────── ᴀᴅᴍɪɴ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ (ɢɪᴠᴇ/ᴇᴅɪᴛ/ʀᴇᴍ) ───────────
 def selector_text(d):
@@ -2101,15 +2107,18 @@ async def cb_ban_ui(c, q, parts):
         await q_safe(q, "🟢 User Unbanned!")
         await show_ban_panel(c, None, edit_msg=q.message)
 
-async def show_admins_list(c, chat_id, edit_msg=None):
+async def show_admins_list(c, chat_id, edit_msg=None, uid=None):
     docs = c.store.find("admins")
     order = {"owner": 0, "manager": 1, "uploader": 2, "broadcaster": 3, "analyst": 4, "custom": 5}
     docs.sort(key=lambda d: order.get(d.get("role"), 9))
     if not docs:
-        txt, kb = "👥 No admins yet.", admin_panel_kb()
+        txt, kb = "👥 No admins yet.", admin_panel_kb(c, uid)
     else:
         rows = [[btn(f"{ROLE_NAME.get(d['role'],'⚙️')} {d.get('name','?')[:18]}",
                      f"adm|view|{d['_id']}") for d in docs[i:i + 2]] for i in range(0, len(docs), 2)]
+        is_owner = (uid and (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner"))
+        if is_owner:
+            rows.append([btn("👑 Transfer Ownership", "adm|transfer_prompt")])
         rows.append([btn("⬅️ Back", "pan|refresh")])
         txt, kb = f"👥 <b>Admins ({len(docs)})</b>\n\nTap to edit permissions:", InlineKeyboardMarkup(rows)
     if edit_msg is not None:
@@ -2306,6 +2315,9 @@ async def cmd_clone(c, m):
     ok, fs_kb = await fs_state(c, uid, is_clone_action=True)
     if not ok:
         await unauthorized(c, uid)
+        target_store = FACTORY if FACTORY else c.store
+        await target_store.update("users", str(uid), pending_action="clone")
+        await c.store.update("users", str(uid), pending_action="clone")
         try:
             await m.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b>\n\nYou must join the required channel before creating your bot clone. Press ✅ ᴠᴇʀɪꜰʏ after joining.",
                           reply_markup=fs_kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
@@ -2627,7 +2639,7 @@ async def cb_edit(c, q, parts):
         try: await q.message.edit_text(f"✏️ <b>S{s} E{e} — Send new caption text:</b>\n\nVars: {{season}} {{episode}} {{botname}}", parse_mode=PM_HTML)
         except RPCError: pass
     elif act == "thumb":
-        if not await perm_ok(c, uid, "thumb"):
+        if not (await perm_ok(c, uid, "thumb") or await perm_ok(c, uid, "edit")):
             await q_safe(q, "❌ NO THUMB PERM!"); return
         set_sess(c, uid, "ed_thumb", aid=aid, s=s, e=e)
         await q_safe(q, "🖼️ Send Thumb Photo")
@@ -2682,8 +2694,14 @@ async def ed_apply(c, m, kind):
 
             os.makedirs(THUMB_DIR, exist_ok=True)
             path = os.path.join(THUMB_DIR, f"{c.bot_id}_{aid}_{sn}_{en}.jpg")
-            try: await c.download_media(tid, file_name=path)
-            except Exception: path = None
+            media_obj = m.photo or (m.document if m.document else m)
+            try:
+                out = await c.download_media(media_obj, file_name=path)
+                path = out if (out and os.path.exists(out)) else path
+                if not (path and os.path.exists(path)):
+                    path = None
+            except Exception:
+                path = None
             await c.store.update("episodes", ep_id(aid, sn, en), thumb_id=tid, thumb_path=path, updated_at=now())
         await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"{aid} S{sn} E{en} — Thumb Updated", important=True, uid=uid)
     clear_sess(c, uid)
@@ -2724,7 +2742,34 @@ async def cb_panel(c, q, parts):
         try: await q.message.edit_text("📝 <b>Send new start message</b> (text/photo/video)...", parse_mode=PM_HTML)
         except RPCError: pass
     elif act == "admins":
-        await q_safe(q, "👥"); await show_admins_list(c, None, edit_msg=q.message)
+        await q_safe(q, "👥"); await show_admins_list(c, None, edit_msg=q.message, uid=uid)
+    elif act == "delclone":
+        if c.is_factory:
+            await q_safe(q, "❌ Cannot delete Factory bot!", alert=True); return
+        is_owner = (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner")
+        if not is_owner:
+            await q_safe(q, "❌ ONLY CLONE OWNER CAN DELETE THIS BOT!", alert=True); return
+        rows = [
+            [btn("⚠️ YES, DELETE CLONE BOT NOW", "pan|do_delclone")],
+            [btn("❌ CANCEL", "pan|refresh")]
+        ]
+        txt = (f"⚠️ <b>DELETE THIS CLONE BOT?</b>\n━━━━━━━━━━━━━━\n\n"
+               f"Are you sure you want to PERMANENTLY delete and stop @{c.username}?\n\n"
+               f"🔥 All data and configuration for this clone will be deleted!")
+        try: await q.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(rows), parse_mode=PM_HTML)
+        except RPCError: pass
+    elif act == "do_delclone":
+        if c.is_factory:
+            await q_safe(q, "❌ Cannot delete Factory bot!", alert=True); return
+        is_owner = (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner")
+        if not is_owner:
+            await q_safe(q, "❌ ONLY CLONE OWNER CAN DELETE THIS BOT!", alert=True); return
+        bid = c.bot_id
+        uname = c.username
+        await delete_clone_bot(bid)
+        await q_safe(q, "🗑️ Clone Bot Deleted!")
+        try: await q.message.edit_text(f"✅ <b>Clone bot @{uname} has been deleted and stopped!</b>", parse_mode=PM_HTML)
+        except RPCError: pass
     elif act == "logch":
         await q_safe(q, "🧾 Log Channel"); await show_log_panel(c, None, edit_msg=q.message)
     elif act == "banuser":
@@ -2810,7 +2855,7 @@ async def cb_panel(c, q, parts):
         doc = await c.store.get("admins", uid)
         role = ROLE_NAME.get(doc["role"], doc["role"]) if doc else "👑 Supreme"
         try: await q.message.edit_text(ADMIN_PANEL_TXT.format(uname=c.username, role=role),
-                                       reply_markup=admin_panel_kb(), parse_mode=PM_HTML)
+                                       reply_markup=admin_panel_kb(c, uid), parse_mode=PM_HTML)
         except RPCError: pass
 
 async def send_list_to(c, chat_id):
@@ -2877,10 +2922,66 @@ async def cb_fs(c, q, parts):
 
 async def cb_adm(c, q, parts):
     uid = q.from_user.id
+    action = parts[1]
+    if action == "transfer_prompt":
+        is_owner = (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner")
+        if not is_owner:
+            await q_safe(q, "❌ Only Owner can transfer ownership!", alert=True); return
+        set_sess(c, uid, "transfer_owner_target")
+        await q_safe(q, "👑 Transfer Ownership")
+        try:
+            await q.message.edit_text("👑 <b>TRANSFER BOT OWNERSHIP</b>\n━━━━━━━━━━━━━━\n\nSend the User ID of the new owner:\n\n⚠️ <b>Note:</b> The target user <u>MUST HAVE STARTED</u> this bot first!\n\n(or send /cancel)", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
+    elif action == "do_transfer":
+        tuid = int(parts[2])
+        is_owner = (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner")
+        if not is_owner:
+            await q_safe(q, "❌ Only Owner can transfer ownership!", alert=True); return
+        target_user = await c.store.get("users", str(tuid)) or await c.store.get("users", tuid)
+        if not target_user:
+            await q_safe(q, "❌ User has not started the bot!", alert=True); return
+        t_name = target_user.get("first_name") or str(tuid)
+
+        await set_cfg(c.store, owner_id=tuid)
+        old_owner_doc = await c.store.get("admins", uid)
+        if old_owner_doc:
+            await c.store.put("admins", str(uid), {
+                "_id": str(uid),
+                "name": old_owner_doc.get("name", str(uid)),
+                "role": "manager",
+                "permissions": list(ROLE_PRESETS["manager"]),
+                "added_by": tuid,
+                "at": now()
+            })
+        await c.store.put("admins", str(tuid), {
+            "_id": str(tuid),
+            "name": t_name,
+            "role": "owner",
+            "permissions": list(PERMS),
+            "added_by": uid,
+            "at": now()
+        })
+        if FACTORY and not c.is_factory:
+            await FACTORY.update("bots", c.bot_id, owner_id=tuid, owner_name=t_name)
+
+        clear_sess(c, uid)
+        await apply_admin_commands(c, tuid)
+        await apply_admin_commands(c, uid)
+        await log_event(c, "👑 ᴏᴡɴᴇʀꜱʜɪᴘ ᴛʀᴀɴꜱꜰᴇʀʀᴇᴅ", f"From: {uid} → To: {tuid} ({t_name})", important=True, uid=uid)
+        await q_safe(q, "👑 Ownership Transferred!")
+        try:
+            await q.message.edit_text(f"🎉 <b>Ownership successfully transferred to {hesc(t_name)} (<code>{tuid}</code>)!</b>\n\nYou are now a Manager.", parse_mode=PM_HTML)
+        except RPCError: pass
+        try:
+            await c.send_message(tuid, f"🎉 <b>You are now the Owner of @{c.username}!</b>\n\nUse /admin to open the Admin Panel.", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
+
     if not await perm_ok(c, uid, "manage_admins"):
         await q_safe(q, "❌ NO MANAGE-ADMINS PERM!"); return
-    action = parts[1]; tuid = int(parts[2])
-    tgt = await c.store.get("admins", tuid)
+    tuid = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    tgt = await c.store.get("admins", tuid) if tuid else None
     if tgt and tgt.get("role") == "owner" and action in ("t", "role", "rem"):
         await q_safe(q, "👑 Clone owner protected!", True); return
     sess = get_sess(c, uid)
@@ -3105,8 +3206,24 @@ async def h_callback(c, q):
                 try: await q.message.delete()
                 except RPCError: pass
                 user_doc = await c.store.get("users", str(uid))
+                pending_action = user_doc.get("pending_action") if user_doc else None
+                if not pending_action and FACTORY:
+                    f_user = await FACTORY.get("users", str(uid))
+                    if f_user:
+                        pending_action = f_user.get("pending_action")
                 pending_anime = user_doc.get("pending_anime") if user_doc else None
-                if pending_anime:
+
+                if pending_action == "clone":
+                    await c.store.update("users", str(uid), pending_action=None)
+                    if FACTORY:
+                        await FACTORY.update("users", str(uid), pending_action=None)
+                    set_sess(c, uid, "clone_token")
+                    try:
+                        await c.send_message(uid, CLONE_PROMPT, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE,
+                                             reply_markup=InlineKeyboardMarkup([[btn("🔴 ᴄᴀɴᴄᴇʟ", "cl|cancel")]]))
+                    except RPCError:
+                        pass
+                elif pending_anime:
                     await c.store.update("users", str(uid), pending_anime=None)
                     await show_user_season_list(c, uid, pending_anime)
                 else:
@@ -3222,8 +3339,11 @@ async def h_callback(c, q):
             ok, fs_kb = await fs_state(c, uid, is_clone_action=True)
             if not ok:
                 await unauthorized(c, uid)
+                target_store = FACTORY if FACTORY else c.store
+                await target_store.update("users", str(uid), pending_action="clone")
+                await c.store.update("users", str(uid), pending_action="clone")
                 await q_safe(q, "🔐 Access Locked!", alert=True)
-                try: await q.message.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇ¨!</b>\n\nYou must join the required channel before creating your bot clone. Press ✅ ᴠᴇʀɪꜰʏ after joining.", reply_markup=fs_kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
+                try: await q.message.reply("🔐 <b>ᴀᴄᴄᴇꜱꜱ ʟᴏᴄᴋᴇᴅ!</b>\n\nYou must join the required channel before creating your bot clone. Press ✅ ᴠᴇʀɪꜰʏ after joining.", reply_markup=fs_kb, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE)
                 except RPCError: pass
                 return
             set_sess(c, uid, "clone_token")
@@ -3334,6 +3454,23 @@ async def route_session(c, m, s):
         await c.store.put("settings", "custom_buttons", {"list": curr})
         clear_sess(c, uid)
         await m.reply("✅ <b>Row of 2 custom buttons added!</b>", parse_mode=PM_HTML)
+    elif step == "transfer_owner_target" and m.text:
+        txt_id = m.text.strip()
+        if not txt_id.isdigit():
+            await m.reply("❌ Send a valid numeric User ID!", parse_mode=PM_HTML); return
+        t_id = int(txt_id)
+        if t_id == uid:
+            await m.reply("⚠️ You are already the owner of this bot!", parse_mode=PM_HTML); return
+        target_user = await c.store.get("users", str(t_id)) or await c.store.get("users", t_id)
+        if not target_user:
+            await m.reply(f"❌ <b>USER HAS NOT STARTED THE BOT!</b>\n\nThe target user (<code>{t_id}</code>) must send /start to this bot before you can transfer ownership to them.", parse_mode=PM_HTML); return
+        t_name = target_user.get("first_name") or str(t_id)
+        set_sess(c, uid, "confirm_transfer_owner", target_uid=t_id, target_name=t_name)
+        kb = InlineKeyboardMarkup([
+            [btn("⚠️ YES, TRANSFER NOW", f"adm|do_transfer|{t_id}")],
+            [btn("❌ CANCEL", "pan|admins")]
+        ])
+        await m.reply(f"⚠️ <b>CONFIRM OWNERSHIP TRANSFER</b>\n━━━━━━━━━━━━━━\n\nAre you sure you want to transfer ownership of @{c.username} to:\n👤 <b>{hesc(t_name)}</b> (<code>{t_id}</code>)?\n\n🚨 You will lose owner privileges and become a Manager.", reply_markup=kb, parse_mode=PM_HTML)
     elif step == "clone_token":
         await clone_token(c, m)
     elif step == "up_new_anime_name":
