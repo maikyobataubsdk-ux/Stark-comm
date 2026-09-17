@@ -2678,25 +2678,31 @@ async def ed_apply(c, m, kind):
             await c.store.update("episodes", ep_id(aid, sn, en), thumb_id=None, thumb_path=None, updated_at=now())
         else:
             tid = None
+            media_obj = None
             if m.photo:
                 tid = m.photo.file_id
+                media_obj = m.photo
             elif m.document and m.document.thumbs:
                 tid = m.document.thumbs[0].file_id
+                media_obj = m.document.thumbs[0].file_id
             elif m.video and m.video.thumbs:
                 tid = m.video.thumbs[0].file_id
+                media_obj = m.video.thumbs[0].file_id
             elif m.animation and m.animation.thumbs:
                 tid = m.animation.thumbs[0].file_id
+                media_obj = m.animation.thumbs[0].file_id
             elif m.document:
                 tid = m.document.file_id
+                media_obj = m.document
 
             if not tid:
                 await m.reply("🖼️ <b>Send photo or thumbnail image!</b>", parse_mode=PM_HTML); return
 
             os.makedirs(THUMB_DIR, exist_ok=True)
             path = os.path.join(THUMB_DIR, f"{c.bot_id}_{aid}_{sn}_{en}.jpg")
-            media_obj = m.photo or (m.document if m.document else m)
+            dl_target = media_obj or tid or m
             try:
-                out = await c.download_media(media_obj, file_name=path)
+                out = await c.download_media(dl_target, file_name=path)
                 path = out if (out and os.path.exists(out)) else path
                 if not (path and os.path.exists(path)):
                     path = None
