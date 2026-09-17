@@ -15,7 +15,9 @@ try:
     LPO_DISABLE = LinkPreviewOptions(is_disabled=True)
 except ImportError:
     LPO_DISABLE = None
+import pyrogram.utils as utils
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler, RawUpdateHandler
+from pyrogram.raw.types import UpdateBotChatInviteRequester, UpdatePendingJoinRequests
 from pyrogram.errors import (FloodWait, RPCError, UserNotParticipant, AccessTokenInvalid,
                              AccessTokenExpired, UserIsBlocked, InputUserDeactivated,
                              PeerIdInvalid, ChatAdminRequired)
@@ -1358,9 +1360,9 @@ async def cmd_cancel(c, m):
 # ─────────── ᴇᴅɪᴛ / ᴅᴇʟᴇᴛᴇ ───────────
 def edit_kb(aid, s, e):
     return InlineKeyboardMarkup([
-        [btn("🎬 Replace Video", f"ed|video|{aid}:{s}:{e}"), btn("✏️ Edit Caption", f"ed|cap|{aid}:{s}:{e}")],
+        [btn("🎬 Replace / Edit Video", f"ed|video|{aid}:{s}:{e}"), btn("✏️ Edit Caption", f"ed|cap|{aid}:{s}:{e}")],
         [btn("🖼️ Replace Thumb", f"ed|thumb|{aid}:{s}:{e}")],
-        [btn("⬅️ Back", "pan|refresh")]])
+        [btn("⬅️ Back", f"adm_edit|sel_ep_list|{aid}|{s}")]])
 
 async def show_editor(c, chat_id, aid, s, e):
     ep = await c.store.get("episodes", ep_id(aid, s, e))
@@ -1368,11 +1370,14 @@ async def show_editor(c, chat_id, aid, s, e):
         await c.send_message(chat_id, f"❌ S{s} E{e} not found!"); return
     anime = await c.store.get("animes", aid)
     title = anime.get("title", "Anime") if anime else "Anime"
+    qualities = ep.get("qualities") or {}
+    q_str = ", ".join(qualities.keys()) if qualities else "Default/Auto"
     txt = (f"✏️ <b>Edit — {hesc(title)} (S{s} E{e})</b>\n━━━━━━━━━━━━━━\n"
            f"🎬 Type: {ep.get('type','video')}\n"
+           f"⚙️ Qualities: <b>{q_str}</b>\n"
            f"📝 Caption: {(ep.get('caption') or '—')[:80]}\n"
            f"🖼️ Thumb: {'✅' if ep.get('thumb_id') or ep.get('thumb_path') else '❌'}\n"
-           f"⏰ Updated: {dt(ep.get('updated_at', 0))}\n\nSelect:")
+           f"⏰ Updated: {dt(ep.get('updated_at', 0))}\n\nSelect an option to edit:")
     await c.send_message(chat_id, txt, reply_markup=edit_kb(aid, s, e), parse_mode=PM_HTML)
 
 async def show_admin_edit_menu(c, chat_id, edit_msg=None):
@@ -2033,7 +2038,7 @@ async def cmd_ban(c, m):
         set_sess(c, uid, "ban_target")
         await m.reply("🚫 Reply to user or send ID to ban:\n<code>/ban 123456789</code>", parse_mode=PM_HTML); return
     t_str = str(t)
-    if is_supreme(t) or (await c.store.get("admins", t_str)) or (await c.store.get("admins", t)):
+    if is_supreme(t_str) or is_supreme(t) or (await c.store.get("admins", t_str)) or (await c.store.get("admins", t)):
         await m.reply("❌ Cannot ban an Admin / Supreme Owner!", parse_mode=PM_HTML); return
     u = await c.store.get("users", t_str) or await c.store.get("users", t) or {"_id": t_str, "first_name": name or t_str, "started_at": now(), "last_seen": now()}
     u["is_banned"] = True
@@ -2111,16 +2116,19 @@ async def show_admins_list(c, chat_id, edit_msg=None, uid=None):
     docs = c.store.find("admins")
     order = {"owner": 0, "manager": 1, "uploader": 2, "broadcaster": 3, "analyst": 4, "custom": 5}
     docs.sort(key=lambda d: order.get(d.get("role"), 9))
-    if not docs:
-        txt, kb = "👥 No admins yet.", admin_panel_kb(c, uid)
-    else:
-        rows = [[btn(f"{ROLE_NAME.get(d['role'],'⚙️')} {d.get('name','?')[:18]}",
-                     f"adm|view|{d['_id']}") for d in docs[i:i + 2]] for i in range(0, len(docs), 2)]
-        is_owner = (uid and (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner"))
-        if is_owner:
-            rows.append([btn("👑 Transfer Ownership", "adm|transfer_prompt")])
-        rows.append([btn("⬅️ Back", "pan|refresh")])
-        txt, kb = f"👥 <b>Admins ({len(docs)})</b>\n\nTap to edit permissions:", InlineKeyboardMarkup(rows)
+    rows = [[btn(f"{ROLE_NAME.get(d['role'],'⚙️')} {d.get('name','?')[:18]}",
+                 f"adm|view|{d['_id']}") for d in docs[i:i + 2]] for i in range(0, len(docs), 2)]
+    is_owner = (uid and (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner"))
+
+    row_mgmt = [btn("➕ Add Admin", "adm|add_prompt")]
+    if is_owner:
+        row_mgmt.append(btn("👑 Transfer Ownership", "adm|transfer_prompt"))
+    rows.append(row_mgmt)
+    rows.append([btn("⬅️ Back", "pan|refresh")])
+
+    txt = f"👥 <b>Admins ({len(docs)})</b>\n\nTap on an admin to edit permissions or tap ➕ Add Admin:"
+    kb = InlineKeyboardMarkup(rows)
+
     if edit_msg is not None:
         try: await edit_msg.edit_text(txt, reply_markup=kb, parse_mode=PM_HTML)
         except RPCError: pass
@@ -2627,9 +2635,13 @@ async def cb_edit(c, q, parts):
     if not ep:
         await q_safe(q, "❌ NOT FOUND!"); return
     if act == "video":
-        set_sess(c, uid, "ed_video", aid=aid, s=s, e=e)
-        await q_safe(q, "🎬 Send New Video")
-        try: await q.message.edit_text(f"🎬 <b>S{s} E{e} — Send new video:</b>", parse_mode=PM_HTML)
+        kb = InlineKeyboardMarkup([
+            [btn("📱 480p", f"ed_q|480p|{ref}"), btn("🎬 720p", f"ed_q|720p|{ref}"), btn("🖥️ 1080p", f"ed_q|1080p|{ref}")],
+            [btn("⚙️ Replace All / Default", f"ed_q|default|{ref}")],
+            [btn("⬅️ Back", f"adm_edit|show_editor|{aid}|{s}|{e}")]
+        ])
+        await q_safe(q, "🎬 Quality Option")
+        try: await q.message.edit_text(f"🎬 <b>S{s} E{e} — Select which quality video to edit/replace:</b>", reply_markup=kb, parse_mode=PM_HTML)
         except RPCError: pass
     elif act == "cap":
         if not await perm_ok(c, uid, "captions"):
@@ -2656,7 +2668,19 @@ async def ed_apply(c, m, kind):
         mtype, fid, tid = get_media(m)
         if not fid:
             await m.reply("🎬 <b>Send video file!</b>", parse_mode=PM_HTML); return
-        upd = {"file_id": fid, "file_ids": [fid], "qualities": {}, "type": mtype, "updated_at": now()}
+        req_q = d.get("quality")
+        qualities = ep.get("qualities") or {}
+        fids = ep.get("file_ids") or ([ep["file_id"]] if ep.get("file_id") else [])
+
+        if req_q and req_q != "default":
+            qualities[req_q] = fid
+            if fid not in fids: fids.append(fid)
+            upd = {"file_id": fids[0], "file_ids": fids, "qualities": qualities, "type": mtype, "updated_at": now()}
+            log_msg = f"{aid} S{sn} E{en} — {req_q} Video Updated"
+        else:
+            upd = {"file_id": fid, "file_ids": [fid], "qualities": {}, "type": mtype, "updated_at": now()}
+            log_msg = f"{aid} S{sn} E{en} — Video Replaced"
+
         if tid:
             p = ep.get("thumb_path")
             if p and os.path.exists(p):
@@ -2664,8 +2688,9 @@ async def ed_apply(c, m, kind):
                 except OSError: pass
             upd["thumb_id"] = tid
             upd["thumb_path"] = None
+
         await c.store.update("episodes", ep_id(aid, sn, en), **upd)
-        await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"{aid} S{sn} E{en} — Video Replaced", important=True, uid=uid)
+        await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", log_msg, important=True, uid=uid)
     elif kind == "cap":
         await c.store.update("episodes", ep_id(aid, sn, en), caption=m.text or "", updated_at=now())
         await log_event(c, "✏️ ᴇᴘɪꜱᴏᴅᴇ ᴇᴅɪᴛᴇᴅ", f"{aid} S{sn} E{en} — Caption Updated", important=True, uid=uid)
@@ -2929,6 +2954,15 @@ async def cb_fs(c, q, parts):
 async def cb_adm(c, q, parts):
     uid = q.from_user.id
     action = parts[1]
+    if action == "add_prompt":
+        if not await perm_ok(c, uid, "manage_admins"):
+            await q_safe(q, "❌ NO MANAGE-ADMINS PERM!"); return
+        set_sess(c, uid, "ga_target")
+        await q_safe(q, "➕ Add Admin")
+        try:
+            await q.message.edit_text("👤 <b>ADD NEW ADMIN</b>\n━━━━━━━━━━━━━━\n\nSend User ID or reply to a user message:\n\nExample: <code>123456789 Name</code> or just <code>123456789</code>\n\n(or send /cancel)", parse_mode=PM_HTML)
+        except RPCError: pass
+        return
     if action == "transfer_prompt":
         is_owner = (cfg(c.store).get("owner_id") == uid or is_supreme(uid) or (c.store.get_sync("admins", uid) or {}).get("role") == "owner")
         if not is_owner:
@@ -3395,8 +3429,20 @@ async def h_callback(c, q):
             await cb_adm_list_menu(c, q, data.split("|"))
         elif data.startswith("up|") or data.startswith("up_q|"):
             await cb_upload(c, q, data.split("|"))
-        elif data.startswith("ed|"):
-            await cb_edit(c, q, data.split("|"))
+        elif data.startswith("ed|") or data.startswith("ed_q|"):
+            parts = data.split("|")
+            if parts[0] == "ed_q":
+                q_val = parts[1]
+                ref = parts[2]
+                aid, sn_s, en_s = ref.split(":")
+                s, e = int(sn_s), int(en_s)
+                set_sess(c, uid, "ed_video", aid=aid, s=s, e=e, quality=q_val)
+                await q_safe(q, f"🎬 Send Video for {q_val}")
+                q_txt = f" ({q_val})" if q_val != "default" else ""
+                try: await q.message.edit_text(f"🎬 <b>S{s} E{e}{q_txt} — Send new video:</b>", parse_mode=PM_HTML)
+                except RPCError: pass
+            else:
+                await cb_edit(c, q, parts)
         elif data.startswith("pan|"):
             await cb_panel(c, q, data.split("|"))
         elif data.startswith("fs|"):
@@ -3700,35 +3746,39 @@ async def route_session(c, m, s):
         await log_event(c, "🚫 ᴀᴅᴍɪɴ ʀᴇᴍᴏᴠᴇᴅ", f"Admin: {t}", important=True, uid=t)
         await m.reply("🗑 <b>Admin removed!</b>", parse_mode=PM_HTML)
     elif step == "ban_target" and m.text:
+        txt_val = m.text.strip()
         t, name = msg_target(m)
-        if not t and (m.text or "").strip().isdigit():
-            t = int(m.text.strip()); name = str(t)
+        if not t and txt_val.lstrip("-").isdigit():
+            t = int(txt_val); name = str(t)
         if not t:
-            await m.reply("🚫 Send User ID:"); return
+            await m.reply("🚫 Send a valid numeric User ID or reply to a message:"); return
+        t_str = str(t)
         clear_sess(c, uid)
-        if is_supreme(t) or (await c.store.get("admins", t)):
+        if is_supreme(t_str) or is_supreme(t) or (await c.store.get("admins", t_str)) or (await c.store.get("admins", t)):
             await m.reply("❌ Cannot ban an Admin / Supreme Owner!", parse_mode=PM_HTML); return
-        u = await c.store.get("users", t) or {"_id": str(t), "first_name": name or str(t), "started_at": now(), "last_seen": now()}
+        u = await c.store.get("users", t_str) or await c.store.get("users", t) or {"_id": t_str, "first_name": name or t_str, "started_at": now(), "last_seen": now()}
         u["is_banned"] = True
         u["banned_by"] = uid
         u["banned_at"] = now()
-        await c.store.put("users", t, u)
-        await log_event(c, "🚫 ᴜꜱᴇʀ ʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
-        await m.reply(f"🚫 <b>User {t} has been banned!</b>", parse_mode=PM_HTML)
+        await c.store.put("users", t_str, u)
+        await log_event(c, "🚫 ᴜꜱᴇʀ ʙᴀɴɴᴇᴅ", f"User: {t_str}", important=True, uid=uid)
+        await m.reply(f"🚫 <b>User {t_str} has been banned!</b>", parse_mode=PM_HTML)
     elif step == "unban_target" and m.text:
+        txt_val = m.text.strip()
         t, _ = msg_target(m)
-        if not t and (m.text or "").strip().isdigit():
-            t = int(m.text.strip())
+        if not t and txt_val.lstrip("-").isdigit():
+            t = int(txt_val)
         if not t:
-            await m.reply("🟢 Send User ID:"); return
+            await m.reply("🟢 Send a valid numeric User ID or reply to a message:"); return
+        t_str = str(t)
         clear_sess(c, uid)
-        u = await c.store.get("users", t)
+        u = await c.store.get("users", t_str) or await c.store.get("users", t)
         if not u or not u.get("is_banned"):
             await m.reply("ℹ️ User is not banned.", parse_mode=PM_HTML); return
         u["is_banned"] = False
-        await c.store.put("users", t, u)
-        await log_event(c, "🟢 ᴜꜱᴇʀ ᴜɴʙᴀɴɴᴇᴅ", f"User: {t}", important=True, uid=uid)
-        await m.reply(f"🟢 <b>User {t} has been unbanned!</b>", parse_mode=PM_HTML)
+        await c.store.put("users", t_str, u)
+        await log_event(c, "🟢 ᴜꜱᴇʀ ᴜɴʙᴀɴɴᴇᴅ", f"User: {t_str}", important=True, uid=uid)
+        await m.reply(f"🟢 <b>User {t_str} has been unbanned!</b>", parse_mode=PM_HTML)
 
 async def h_generic(c, m):
     try:
@@ -3786,27 +3836,51 @@ async def h_admin_cmds(c, m):
 
 async def h_join_request(c, update, users, chats):
     try:
-        req = getattr(update, "bot_chat_join_request", None)
-        if not req: return
+        uid = None
+        chat_id = None
+
+        if isinstance(update, UpdateBotChatInviteRequester):
+            uid = update.user_id
+            chat_id = utils.get_peer_id(update.peer)
+        elif hasattr(update, "bot_chat_join_request") and getattr(update, "bot_chat_join_request"):
+            req = update.bot_chat_join_request
+            uid = req.user_id
+            chat_id = req.chat_id
+        elif hasattr(update, "user_id") and hasattr(update, "chat_id"):
+            uid = getattr(update, "user_id")
+            chat_id = getattr(update, "chat_id")
+
+        if not uid or not chat_id:
+            return
+
+        # Check ForceSub channels for this bot (or Factory if factory client)
         st = cfg(c.store)
-        channels = st.get("fs_channels", [])
+        channels = list(st.get("fs_channels", []))
         if not channels and st.get("fs_mode") != "off" and st.get("fs_channel"):
             channels = [{"mode": st.get("fs_mode"), "chat_id": st.get("fs_channel")}]
 
-        # Check if chat_id matches any configured ForceSub channel
+        if FACTORY and c.is_factory:
+            fst = cfg(FACTORY)
+            f_channels = list(fst.get("fs_channels", []))
+            if not f_channels and fst.get("fs_mode") != "off" and fst.get("fs_channel"):
+                f_channels = [{"mode": fst.get("fs_mode"), "chat_id": fst.get("fs_channel")}]
+            for fc_item in f_channels:
+                if fc_item not in channels:
+                    channels.append(fc_item)
+
         matched = False
         for ch in channels:
-            if ch.get("chat_id") and str(ch["chat_id"]) == str(req.chat_id):
+            if ch.get("chat_id") and str(ch["chat_id"]) == str(chat_id):
                 matched = True
                 break
 
         if not matched:
             return
 
-        uid = req.user_id
+        # Mark user as verified in c.store
         u = await c.store.get("users", uid)
         verified_chats = set((u.get("fs_verified_chats") or []) if u else [])
-        verified_chats.add(str(req.chat_id))
+        verified_chats.add(str(chat_id))
 
         if not u:
             u = {"_id": str(uid), "first_name": "User", "username": "", "started_at": now(),
@@ -3815,16 +3889,59 @@ async def h_join_request(c, update, users, chats):
         else:
             await c.store.update("users", uid, fs_verified=True, fs_request=True, fs_verified_chats=list(verified_chats))
 
+        if FACTORY:
+            f_u = await FACTORY.get("users", uid)
+            f_vchats = set((f_u.get("fs_verified_chats") or []) if f_u else [])
+            f_vchats.add(str(chat_id))
+            if not f_u:
+                await FACTORY.put("users", uid, {"_id": str(uid), "first_name": "User", "username": "", "started_at": now(), "last_seen": now(), "fs_verified": True, "fs_verified_chats": list(f_vchats)})
+            else:
+                await FACTORY.update("users", uid, fs_verified=True, fs_request=True, fs_verified_chats=list(f_vchats))
+
+        # Approve join request in chat
         ap = getattr(c, "approve_chat_join_request", None)
         if ap:
-            try: await ap(req.chat_id, uid)
-            except RPCError: pass
+            try:
+                await ap(chat_id, uid)
+            except RPCError:
+                pass
+        else:
+            try:
+                from pyrogram.raw.functions.messages import HideChatJoinRequest
+                await c.invoke(HideChatJoinRequest(peer=await c.resolve_peer(chat_id), user_id=await c.resolve_peer(uid), approved=True))
+            except RPCError:
+                pass
+
         await convert_referral(c, uid)
-        await log_event(c, "✅ ꜰꜱ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ", f"User: {uid}", uid=uid)
-        try:
-            await c.send_message(uid, "✅ <b>ᴀᴄᴄᴇꜱꜱ ᴀᴘᴘʀᴏᴠᴇᴅ!</b>\n\n▶️ Now send: S1 E1 or Anime Keyword", parse_mode=PM_HTML)
-        except RPCError:
-            pass
+        await log_event(c, "✅ ꜰꜱ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ", f"User: {uid} | Chat: {chat_id}", uid=uid)
+
+        # Resume pending action / notify user
+        user_doc = await c.store.get("users", str(uid)) or u
+        pending_action = user_doc.get("pending_action") if user_doc else None
+        if not pending_action and FACTORY:
+            f_user = await FACTORY.get("users", str(uid))
+            if f_user:
+                pending_action = f_user.get("pending_action")
+        pending_anime = user_doc.get("pending_anime") if user_doc else None
+
+        if pending_action == "clone":
+            await c.store.update("users", str(uid), pending_action=None)
+            if FACTORY:
+                await FACTORY.update("users", str(uid), pending_action=None)
+            set_sess(c, uid, "clone_token")
+            try:
+                await c.send_message(uid, CLONE_PROMPT, parse_mode=PM_HTML, link_preview_options=LPO_DISABLE,
+                                     reply_markup=InlineKeyboardMarkup([[btn("🔴 ᴄᴀɴᴄᴇʟ", "cl|cancel")]]))
+            except RPCError:
+                pass
+        elif pending_anime:
+            await c.store.update("users", str(uid), pending_anime=None)
+            await show_user_season_list(c, uid, pending_anime)
+        else:
+            try:
+                await c.send_message(uid, "✅ <b>ᴀᴄᴄᴇꜱꜱ ᴀᴘᴘʀᴏᴠᴇᴅ!</b>\n\nPress /start or select an anime to watch ✨", parse_mode=PM_HTML)
+            except RPCError:
+                pass
     except Exception as e:
         LOG.exception("Join request error")
         await dev_log(f"⚠️ Join request error: {e!r}")
