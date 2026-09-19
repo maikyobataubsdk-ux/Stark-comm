@@ -2280,7 +2280,7 @@ async def fs_got_channel(c, m, mode):
         ch_entry = {"mode": "private", "chat_id": chat.id, "username": chat.username or "", "link": link_str}
         channels.append(ch_entry)
         await set_cfg(store, fs_channels=channels, fs_mode="private", fs_channel=chat.id, fs_link=link_str, fs_username=chat.username or "")
-        await m.reply(f"✅ <b>Private Request ForceSub Channel Added! ({len(channels)}/10)</b>\n\n🔗 Link Ready — Join requests will auto-approve.", parse_mode=PM_HTML)
+        await m.reply(f"✅ <b>Private Request ForceSub Channel Added! ({len(channels)}/10)</b>\n\n🔗 Link Ready — Join requests will be verified.", parse_mode=PM_HTML)
     await log_event(c, "🔐 ꜰᴏʀᴄᴇ-ꜱᴜʙ ᴄʜᴀɴɢᴇᴅ", f"Mode: {mode} | Chat: {chat.id} (Total: {len(channels)})", important=True)
     clear_sess(c, m.from_user.id)
 
@@ -3918,22 +3918,8 @@ async def h_join_request(c, update, users, chats):
             else:
                 await FACTORY.update("users", uid, fs_verified=True, fs_request=True, fs_verified_chats=list(f_vchats))
 
-        # Approve join request in chat
-        ap = getattr(c, "approve_chat_join_request", None)
-        if ap:
-            try:
-                await ap(chat_id, uid)
-            except RPCError:
-                pass
-        else:
-            try:
-                from pyrogram.raw.functions.messages import HideChatJoinRequest
-                await c.invoke(HideChatJoinRequest(peer=await c.resolve_peer(chat_id), user_id=await c.resolve_peer(uid), approved=True))
-            except RPCError:
-                pass
-
         await convert_referral(c, uid)
-        await log_event(c, "✅ ꜰꜱ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ", f"User: {uid} | Chat: {chat_id}", uid=uid)
+        await log_event(c, "✅ ꜰꜱ ʀᴇQᴜᴇꜱᴛ ᴠᴇʀɪꜰɪᴇᴅ", f"User: {uid} | Chat: {chat_id}", uid=uid)
 
         # Resume pending action / send start message
         user_doc = await c.store.get("users", str(uid)) or u
