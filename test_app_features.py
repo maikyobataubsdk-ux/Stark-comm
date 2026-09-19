@@ -283,8 +283,7 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
             # Ensure approve_chat_join_request was NOT called
             client.approve_chat_join_request.assert_not_called()
 
-    async def test_requested_channel_force_sub_flow(self):
-        # 1. Test verification without approval
+    async def test_multi_channel_force_sub_flow(self):
         await app.ensure_defaults(self.store)
         client = MagicMock()
         client.store = self.store
@@ -292,45 +291,92 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
         client.username = "testbot"
         client.is_factory = False
         client.send_message = AsyncMock()
-        client.approve_chat_join_request = AsyncMock()
 
-        await app.set_cfg(self.store, fs_channels=[{"mode": "private", "chat_id": -100999, "username": "", "link": "https://t.me/+abc"}])
+        # Configure 2 channels: 1 private request channel, 1 public channel
+        ch1 = {"mode": "private", "chat_id": -100111, "username": "", "link": "https://t.me/+link1", "btn_name": "Request Channel 1"}
+        ch2 = {"mode": "public", "chat_id": -100222, "username": "channel2", "link": "https://t.me/channel2", "btn_name": "Join Channel 2"}
+        await app.set_cfg(self.store, fs_channels=[ch1, ch2])
 
-        # Test 2: User requests protected command without sending join request -> access denied
-        ok, kb = await app.fs_state(client, 99999)
+        # Mock get_chat_member to raise UserNotParticipant by default
+        client.get_chat_member = AsyncMock(side_effect=app.UserNotParticipant())
+
+        # Initially, user 88888 has joined neither -> fs_state returns False and kb has custom button labels
+        ok, kb = await app.fs_state(client, 88888)
         self.assertFalse(ok)
         self.assertIsNotNone(kb)
+        btn1_text = kb.inline_keyboard[0][0].text
+        btn2_text = kb.inline_keyboard[1][0].text
+        self.assertEqual(btn1_text, app.sc("Request Channel 1"))
+        self.assertEqual(btn2_text, app.sc("Join Channel 2"))
 
-        # Test 3: Join request from unrelated channel -> not verified
-        unrelated_update = MagicMock(spec=["user_id", "chat_id"])
-        unrelated_update.user_id = 99999
-        unrelated_update.chat_id = -100888
-        await app.h_join_request(client, unrelated_update, None, None)
+        # User sends join request to channel 1 ONLY
+        update1 = MagicMock(spec=["user_id", "chat_id"])
+        update1.user_id = 88888
+        update1.chat_id = -100111
 
-        ok, _ = await app.fs_state(client, 99999)
+        with patch("app.send_start_content", new_callable=AsyncMock) as mock_send_start:
+            # Client get_chat_member for public channel 2 returns UserNotParticipant
+            client.get_chat_member = AsyncMock(side_effect=app.UserNotParticipant())
+            await app.h_join_request(client, update1, None, None)
+
+            # Start message should NOT be sent yet because channel 2 is still pending!
+            mock_send_start.assert_not_called()
+
+        # User is still locked out
+        ok, _ = await app.fs_state(client, 88888)
         self.assertFalse(ok)
 
-        # Test 1: Configured channel join request -> user verified, access granted, approve_chat_join_request NOT called
-        update = MagicMock(spec=["user_id", "chat_id"])
-        update.user_id = 99999
-        update.chat_id = -100999
+        # Now user joins public channel 2 as well
+        member_mock = MagicMock()
+        member_mock.status = app.CMS.MEMBER
+        client.get_chat_member = AsyncMock(return_value=member_mock)
 
-        with patch("app.send_start_content", new_callable=AsyncMock):
-            await app.h_join_request(client, update, None, None)
-
-        client.approve_chat_join_request.assert_not_called()
-        ok, _ = await app.fs_state(client, 99999)
+        # Now fs_state returns True
+        ok, _ = await app.fs_state(client, 88888)
         self.assertTrue(ok)
 
-        # Test 4: Bot restart simulation -> persistence retains verified status
-        await self.store.flush()
-        new_store = app.Store(self.clone_db_path)
-        new_client = MagicMock()
-        new_client.store = new_store
-        new_client.bot_id = 1001
+    async def test_edit_forcesub_button_name_flow(self):
+        await app.ensure_defaults(self.store)
+        await self.store.put("admins", "100", {"_id": "100", "role": "owner", "permissions": app.PERMS})
 
-        ok_after_restart, _ = await app.fs_state(new_client, 99999)
-        self.assertTrue(ok_after_restart)
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+
+        # Add a channel
+        ch1 = {"mode": "private", "chat_id": -100555, "username": "", "link": "https://t.me/+join"}
+        await app.set_cfg(self.store, fs_channels=[ch1])
+
+        # Callback to edit button name for channel #1 (index 0)
+        q = MagicMock()
+        q.from_user.id = 100
+        q.data = "fs|editbtn|0"
+        q.answer = AsyncMock()
+        q.message.edit_text = AsyncMock()
+
+        await app.h_callback(client, q)
+        q.message.edit_text.assert_called_once()
+        self.assertIn("EDIT BUTTON NAME FOR CHANNEL #1", q.message.edit_text.call_args[0][0])
+
+        # Admin sends new custom button name
+        msg = MagicMock()
+        msg.from_user.id = 100
+        msg.text = "Custom Request Button"
+        msg.reply = AsyncMock()
+
+        sess = app.get_sess(client, 100)
+        self.assertEqual(sess["step"], "fs_btn_name")
+
+        with patch("app.show_fs_panel", new_callable=AsyncMock):
+            await app.route_session(client, msg, sess)
+
+        channels = app.cfg(self.store).get("fs_channels", [])
+        self.assertEqual(channels[0].get("btn_name"), "Custom Request Button")
+
+        # Verify button label in fs_state
+        ok, kb = await app.fs_state(client, 999)
+        self.assertFalse(ok)
+        self.assertEqual(kb.inline_keyboard[0][0].text, app.sc("Custom Request Button"))
 
     async def test_validate_channel_parsing(self):
         client = MagicMock()

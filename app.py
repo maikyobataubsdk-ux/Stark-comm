@@ -587,16 +587,13 @@ async def fs_state(c, uid, is_clone_action=False):
 
     u = await target_store.get("users", uid)
     verified_chats = set((u.get("fs_verified_chats") or []) if u else [])
-    if u and u.get("fs_verified"):
-        # Legacy all-verified check
-        verified_chats.update(str(ch.get("chat_id")) for ch in channels if ch.get("chat_id"))
 
     unsub_rows = []
     all_ok = True
 
     for ch in channels:
         cid = ch.get("chat_id")
-        cid_str = str(cid)
+        cid_str = str(cid) if cid else ""
         cmode = ch.get("mode", "public")
         cuname = ch.get("username", "")
         clink = ch.get("link", "")
@@ -609,14 +606,15 @@ async def fs_state(c, uid, is_clone_action=False):
             except (UserNotParticipant, RPCError):
                 is_joined = False
         else:
-            if cid_str in verified_chats or (u and u.get("fs_verified")):
+            if cid_str and cid_str in verified_chats:
                 is_joined = True
 
         if is_joined:
-            verified_chats.add(cid_str)
+            if cid_str:
+                verified_chats.add(cid_str)
         else:
             all_ok = False
-            label = f"🔗 ᴊᴏɪɴ @{cuname}" if cuname else "🔗 ʀᴇQᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ"
+            label = ch.get("btn_name") or (f"🔗 ᴊᴏɪɴ @{cuname}" if cuname else "🔗 ʀᴇQᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ")
             url = f"https://t.me/{cuname}" if (cmode == "public" and cuname) else clink
             if url:
                 unsub_rows.append([ubtn(label, url)])
@@ -625,6 +623,9 @@ async def fs_state(c, uid, is_clone_action=False):
         if u:
             await target_store.update("users", uid, fs_verified=True, fs_verified_chats=list(verified_chats))
         return True, None
+
+    if u:
+        await target_store.update("users", uid, fs_verified=False, fs_verified_chats=list(verified_chats))
 
     unsub_rows.append([btn("✅ ᴠᴇʀɪꜰʏ ɴᴏᴡ", "ckfs")])
     return False, InlineKeyboardMarkup(unsub_rows)
@@ -2152,7 +2153,11 @@ def fs_panel_kb(channels):
     for idx, ch in enumerate(channels[:10]):
         cname = f"@{ch.get('username')}" if ch.get("username") else f"ID: {ch.get('chat_id')}"
         mode_str = "🟢 Pub" if ch.get("mode") == "public" else "🔵 Priv"
-        rows.append([btn(f"🗑️ Remove #{idx+1} {mode_str} {cname[:16]}", f"fs|rm|{idx}")])
+        b_name = (ch.get("btn_name") or "Default")[:12]
+        rows.append([
+            btn(f"✏️ Btn #{idx+1}: {b_name}", f"fs|editbtn|{idx}"),
+            btn(f"🗑️ Rm #{idx+1} {mode_str} {cname[:10]}", f"fs|rm|{idx}")
+        ])
     rows.append([btn("🔙 ʙᴀᴄᴋ", "pan|refresh")])
     return InlineKeyboardMarkup(rows)
 
@@ -2164,7 +2169,8 @@ async def show_fs_panel(c, chat_id, edit_msg=None):
             "mode": st.get("fs_mode", "public"),
             "chat_id": st.get("fs_channel"),
             "username": st.get("fs_username", ""),
-            "link": st.get("fs_link", "")
+            "link": st.get("fs_link", ""),
+            "btn_name": st.get("fs_btn_name", "")
         }]
 
     lines = [f"🔐 <b>ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ (Max 10 Channels)</b>", "━━━━━━━━━━━━━━"]
@@ -2175,7 +2181,8 @@ async def show_fs_panel(c, chat_id, edit_msg=None):
         for idx, ch in enumerate(channels):
             cmode = "🟢 Public" if ch.get("mode") == "public" else "🔵 Private Request"
             cuname = f"@{ch.get('username')}" if ch.get("username") else f"ID: {ch.get('chat_id')}"
-            lines.append(f"{idx+1}. {cmode} — <code>{cuname}</code>")
+            bname = ch.get("btn_name") or (f"🔗 ᴊᴏɪɴ @{ch.get('username')}" if ch.get("username") else "🔗 ʀᴇQᴜᴇꜱᴛ ᴛᴏ ᴊᴏɪɴ")
+            lines.append(f"{idx+1}. {cmode} — <code>{cuname}</code>\n   🔘 Button: <code>{hesc(bname)}</code>")
 
     lines.append("\n💡 <i>You can add up to 10 channels. Supreme Panel /setfs forces clone creation subscription!</i>")
     txt = "\n".join(lines)
@@ -2949,6 +2956,20 @@ async def cb_fs(c, q, parts):
             await set_cfg(c.store, fs_channels=channels, fs_mode=fs_mode)
             await q_safe(q, f"🗑️ Removed channel #{idx+1}")
             await show_fs_panel(c, None, edit_msg=q.message)
+    elif act == "editbtn":
+        idx = int(parts[2])
+        st = cfg(c.store)
+        channels = list(st.get("fs_channels", []))
+        if 0 <= idx < len(channels):
+            ch = channels[idx]
+            set_sess(c, uid, "fs_btn_name", channel_idx=idx)
+            cur_btn = ch.get("btn_name") or "Default"
+            await q_safe(q, f"✏️ Edit Button Name #{idx+1}")
+            txt = (f"✏️ <b>EDIT BUTTON NAME FOR CHANNEL #{idx+1}</b>\n━━━━━━━━━━━━━━\n\n"
+                   f"Current Button Name: <code>{hesc(cur_btn)}</code>\n\n"
+                   f"Send new button text now...\n(or send 'default' to reset to default label)")
+            try: await q.message.edit_text(txt, parse_mode=PM_HTML)
+            except RPCError: pass
     elif act in ("public", "private", "logch"):
         step = {"public": "fs_public", "private": "fs_private", "logch": "fs_logch"}[act]
         set_sess(c, uid, step)
@@ -3698,6 +3719,26 @@ async def route_session(c, m, s):
         await fs_got_channel(c, m, "private")
     elif step == "fs_logch" and m.text:
         await fs_got_logch(c, m)
+    elif step == "fs_btn_name" and m.text:
+        d = s.get("data", {})
+        idx = d.get("channel_idx")
+        st = cfg(c.store)
+        channels = list(st.get("fs_channels", []))
+        if idx is not None and 0 <= idx < len(channels):
+            txt_in = m.text.strip()
+            if txt_in.lower() in ("default", "/default", "reset"):
+                channels[idx].pop("btn_name", None)
+                res_msg = "Default label"
+            else:
+                channels[idx]["btn_name"] = txt_in
+                res_msg = f"<code>{hesc(txt_in)}</code>"
+            await set_cfg(c.store, fs_channels=channels)
+            clear_sess(c, uid)
+            await m.reply(f"✅ <b>Button name for Channel #{idx+1} set to:</b> {res_msg}", parse_mode=PM_HTML)
+            await show_fs_panel(c, m.chat.id)
+        else:
+            clear_sess(c, uid)
+            await m.reply("❌ Invalid channel index.")
     elif step == "log_set" and m.text:
         chat = await validate_channel(c, m.text.strip())
         if not chat:
@@ -3904,22 +3945,29 @@ async def h_join_request(c, update, users, chats):
 
         if not u:
             u = {"_id": str(uid), "first_name": "User", "username": "", "started_at": now(),
-                 "last_seen": now(), "fs_verified": True, "fs_verified_chats": list(verified_chats)}
+                 "last_seen": now(), "fs_verified": False, "fs_verified_chats": list(verified_chats)}
             await c.store.put("users", uid, u)
         else:
-            await c.store.update("users", uid, fs_verified=True, fs_request=True, fs_verified_chats=list(verified_chats))
+            await c.store.update("users", uid, fs_request=True, fs_verified_chats=list(verified_chats))
 
         if FACTORY:
             f_u = await FACTORY.get("users", uid)
             f_vchats = set((f_u.get("fs_verified_chats") or []) if f_u else [])
             f_vchats.add(str(chat_id))
             if not f_u:
-                await FACTORY.put("users", uid, {"_id": str(uid), "first_name": "User", "username": "", "started_at": now(), "last_seen": now(), "fs_verified": True, "fs_verified_chats": list(f_vchats)})
+                await FACTORY.put("users", uid, {"_id": str(uid), "first_name": "User", "username": "", "started_at": now(), "last_seen": now(), "fs_verified": False, "fs_verified_chats": list(f_vchats)})
             else:
-                await FACTORY.update("users", uid, fs_verified=True, fs_request=True, fs_verified_chats=list(f_vchats))
+                await FACTORY.update("users", uid, fs_request=True, fs_verified_chats=list(f_vchats))
 
         await convert_referral(c, uid)
         await log_event(c, "✅ ꜰꜱ ʀᴇQᴜᴇꜱᴛ ᴠᴇʀɪꜰɪᴇᴅ", f"User: {uid} | Chat: {chat_id}", uid=uid)
+
+        # Verify whether all configured channels are satisfied
+        is_clone_act = (u.get("pending_action") == "clone") if u else False
+        ok, _ = await fs_state(c, uid, is_clone_action=is_clone_act)
+        if not ok:
+            LOG.info("User %s submitted join request for chat %s, but remaining channels are pending.", uid, chat_id)
+            return
 
         # Resume pending action / send start message
         user_doc = await c.store.get("users", str(uid)) or u
