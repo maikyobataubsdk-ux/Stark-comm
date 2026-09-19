@@ -280,6 +280,57 @@ class TestAppFeatures(unittest.IsolatedAsyncioTestCase):
             await app.h_join_request(client, update, None, None)
             mock_send_start.assert_called_once()
             self.assertEqual(mock_send_start.call_args[0][1], 12345)
+            # Ensure approve_chat_join_request was NOT called
+            client.approve_chat_join_request.assert_not_called()
+
+    async def test_requested_channel_force_sub_flow(self):
+        # 1. Test verification without approval
+        await app.ensure_defaults(self.store)
+        client = MagicMock()
+        client.store = self.store
+        client.bot_id = 1001
+        client.username = "testbot"
+        client.is_factory = False
+        client.send_message = AsyncMock()
+        client.approve_chat_join_request = AsyncMock()
+
+        await app.set_cfg(self.store, fs_channels=[{"mode": "private", "chat_id": -100999, "username": "", "link": "https://t.me/+abc"}])
+
+        # Test 2: User requests protected command without sending join request -> access denied
+        ok, kb = await app.fs_state(client, 99999)
+        self.assertFalse(ok)
+        self.assertIsNotNone(kb)
+
+        # Test 3: Join request from unrelated channel -> not verified
+        unrelated_update = MagicMock(spec=["user_id", "chat_id"])
+        unrelated_update.user_id = 99999
+        unrelated_update.chat_id = -100888
+        await app.h_join_request(client, unrelated_update, None, None)
+
+        ok, _ = await app.fs_state(client, 99999)
+        self.assertFalse(ok)
+
+        # Test 1: Configured channel join request -> user verified, access granted, approve_chat_join_request NOT called
+        update = MagicMock(spec=["user_id", "chat_id"])
+        update.user_id = 99999
+        update.chat_id = -100999
+
+        with patch("app.send_start_content", new_callable=AsyncMock):
+            await app.h_join_request(client, update, None, None)
+
+        client.approve_chat_join_request.assert_not_called()
+        ok, _ = await app.fs_state(client, 99999)
+        self.assertTrue(ok)
+
+        # Test 4: Bot restart simulation -> persistence retains verified status
+        await self.store.flush()
+        new_store = app.Store(self.clone_db_path)
+        new_client = MagicMock()
+        new_client.store = new_store
+        new_client.bot_id = 1001
+
+        ok_after_restart, _ = await app.fs_state(new_client, 99999)
+        self.assertTrue(ok_after_restart)
 
     async def test_validate_channel_parsing(self):
         client = MagicMock()
